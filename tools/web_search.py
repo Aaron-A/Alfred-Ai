@@ -206,50 +206,74 @@ def _format_brave_results(query: str, data: dict, max_results: int) -> str:
 # ─── xAI Grok ─────────────────────────────────────────────
 
 def _search_via_xai(query: str, api_key: str, max_results: int) -> str:
-    """Use xAI's Grok API with web search enabled. Fallback if Brave isn't configured."""
-    url = "https://api.x.ai/v1/chat/completions"
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {api_key}",
-        "User-Agent": "Alfred-AI/1.0",
-    }
+    """
+    Use xAI's Responses API with web_search tool (grok-4 family only).
+    Docs: https://docs.x.ai/developers/tools/web-search
+    """
+    import subprocess
 
     payload = {
-        "model": "grok-3-mini-fast",
-        "messages": [
+        "model": "grok-4-1-fast-reasoning",
+        "tools": [{"type": "web_search"}],
+        "input": [
             {
-                "role": "system",
+                "role": "user",
                 "content": (
-                    "You are a web search assistant. Search the web and return "
-                    f"the top {max_results} most relevant results for the query. "
+                    f"Search the web and return the top {max_results} most relevant "
+                    f"results for: {query}\n\n"
                     "Format each result as:\n"
                     "1. **Title** — Brief summary (1-2 sentences)\n"
                     "   Source: URL\n\n"
-                    "Be factual and concise. Include dates when relevant."
+                    "Be factual and concise. Include dates and numbers when relevant."
                 ),
             },
-            {"role": "user", "content": f"Search: {query}"},
         ],
-        "search_parameters": {"mode": "auto"},
-        "max_tokens": 1024,
-        "temperature": 0.3,
     }
 
-    data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(url, data=data, headers=headers, method="POST")
-
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            result = json.loads(resp.read().decode("utf-8"))
-            content = result["choices"][0]["message"]["content"]
-            return f"Web search results for: {query}\n\n{content}"
-    except urllib.error.HTTPError as e:
-        body = e.read().decode("utf-8", errors="replace")
-        logger.error(f"xAI search HTTP {e.code}: {body[:200]}")
-        return f"xAI search error ({e.code}): {body[:200]}"
+        proc = subprocess.run(
+            [
+                "curl", "-s",
+                "https://api.x.ai/v1/responses",
+                "-H", "Content-Type: application/json",
+                "-H", f"Authorization: Bearer {api_key}",
+                "-d", json.dumps(payload),
+            ],
+            capture_output=True, text=True, timeout=45,
+        )
+
+        if proc.returncode != 0:
+            logger.error(f"xAI search curl failed: {proc.stderr[:200]}")
+            return ""
+
+        result = json.loads(proc.stdout)
+
+        # Check for API errors (error key is always present, None when no error)
+        if result.get("error"):
+            logger.error(f"xAI search API error: {result['error']}")
+            return ""
+
+        # Extract text from the output array
+        text_parts = []
+        for item in result.get("output", []):
+            if item.get("type") == "message":
+                for content_block in item.get("content", []):
+                    if content_block.get("type") == "output_text":
+                        text_parts.append(content_block.get("text", ""))
+
+        content = "\n".join(text_parts).strip()
+        if not content:
+            logger.warning("xAI search returned empty content")
+            return ""
+
+        return f"Web search results for: {query}\n\n{content}"
+
+    except subprocess.TimeoutExpired:
+        logger.error("xAI search timed out")
+        return ""
     except Exception as e:
         logger.error(f"xAI search error: {e}")
-        return f"xAI search error: {e}"
+        return ""
 
 
 # ─── DuckDuckGo ───────────────────────────────────────────
