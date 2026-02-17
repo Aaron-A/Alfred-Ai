@@ -8,11 +8,15 @@ for thread safety (Agent has mutable conversation history).
 Usage:
     from core.discord import DiscordBot
     bot = DiscordBot()
-    bot.run()  # Blocking — Ctrl+C to stop
+    bot.run()          # Foreground — Ctrl+C to stop
+    bot.run_daemon()   # Background — writes PID file, logs to file
 """
 
 import asyncio
 import logging
+import os
+import signal
+import sys
 from typing import Optional
 from pathlib import Path
 
@@ -24,7 +28,63 @@ from .agent import Agent, AgentConfig
 
 logger = logging.getLogger("alfred.discord")
 
+# PID and log file locations
+PID_FILE = config.PROJECT_ROOT / "data" / "discord.pid"
+LOG_FILE = config.PROJECT_ROOT / "data" / "discord.log"
+
 MAX_MESSAGE_LENGTH = 2000  # Discord's hard limit
+
+
+def _quiet_noisy_loggers():
+    """Suppress noisy HTTP loggers from HuggingFace, httpx, etc."""
+    for name in (
+        "httpx",
+        "httpcore",
+        "urllib3",
+        "sentence_transformers",
+        "huggingface_hub",
+        "transformers",
+    ):
+        logging.getLogger(name).setLevel(logging.WARNING)
+
+
+def is_bot_running() -> Optional[int]:
+    """Check if the Discord bot is running. Returns PID if running, None otherwise."""
+    if not PID_FILE.exists():
+        return None
+    try:
+        pid = int(PID_FILE.read_text().strip())
+        # Check if process is still alive
+        os.kill(pid, 0)
+        return pid
+    except (ValueError, ProcessLookupError, PermissionError):
+        # Stale PID file — clean up
+        PID_FILE.unlink(missing_ok=True)
+        return None
+
+
+def stop_bot() -> bool:
+    """Stop the running Discord bot. Returns True if stopped, False if not running."""
+    pid = is_bot_running()
+    if pid is None:
+        return False
+    try:
+        os.kill(pid, signal.SIGTERM)
+        # Wait briefly for clean shutdown
+        import time
+        for _ in range(20):  # 2 seconds max
+            time.sleep(0.1)
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                break
+        PID_FILE.unlink(missing_ok=True)
+        return True
+    except ProcessLookupError:
+        PID_FILE.unlink(missing_ok=True)
+        return True
+    except PermissionError:
+        return False
 
 
 class DiscordBot:
@@ -224,7 +284,7 @@ class DiscordBot:
                 (workspace / "memory").mkdir(exist_ok=True)
                 (workspace / "tools").mkdir(exist_ok=True)
 
-                agent = Agent(agent_config)
+                agent = Agent(agent_config, session_id=str(channel_id))
                 self._agents[channel_id] = agent
                 logger.info(
                     f"Loaded agent '{agent_name}' for #{ch_cfg.get('name', channel_id)}"
@@ -315,23 +375,45 @@ class DiscordBot:
 
         return chunks
 
-    def run(self):
+    def run(self, foreground: bool = True):
         """
         Start the Discord bot. Blocks until disconnected (Ctrl+C).
+
+        Args:
+            foreground: If True, runs interactively with console output.
+                       If False, runs quietly (for daemon mode — logging goes to file).
         """
         token = self._discord_cfg["bot_token"]
 
-        # Set up logging
-        logging.basicConfig(
-            level=logging.INFO,
-            format="  [discord] %(message)s",
-        )
+        if foreground:
+            # Interactive console logging
+            logging.basicConfig(
+                level=logging.INFO,
+                format="  [discord] %(message)s",
+            )
+            _quiet_noisy_loggers()
 
-        print("  Starting Alfred Discord bot...")
-        print(f"  Watching {len(self._channel_configs)} channel(s)")
-        print("  Press Ctrl+C to stop.\n")
+            print("  Starting Alfred Discord bot...")
+            print(f"  Watching {len(self._channel_configs)} channel(s)")
+            print("  Press Ctrl+C to stop.\n")
+        else:
+            # File logging for daemon mode
+            LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+            logging.basicConfig(
+                level=logging.INFO,
+                format="%(asctime)s [%(levelname)s] %(message)s",
+                filename=str(LOG_FILE),
+                filemode="a",
+            )
+            _quiet_noisy_loggers()
 
         try:
             self._client.run(token, log_handler=None)
         except KeyboardInterrupt:
-            print("\n  Shutting down...")
+            if foreground:
+                print("\n  Shutting down...")
+        finally:
+            PID_FILE.unlink(missing_ok=True)
+
+    # Daemon mode is handled by cmd_start() in __main__.py using subprocess.Popen.
+    # This avoids fork-safety issues with LanceDB.

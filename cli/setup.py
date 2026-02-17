@@ -425,22 +425,23 @@ def print_summary(config_data: dict):
 
     console.print("  [bold green]Alfred is ready.[/]\n")
     console.print("  [dim]Next steps:[/]")
-    console.print("    alfred agent chat alfred     [dim]# Chat with your default agent[/]")
-    console.print("    alfred agent create <name>   [dim]# Create a specialist agent[/]")
     console.print("    alfred discord setup          [dim]# Connect to Discord[/]")
+    console.print("    alfred start                  [dim]# Start Alfred (background daemon)[/]")
+    console.print("    alfred agent chat alfred      [dim]# Chat with your default agent[/]")
     console.print()
 
 
-def create_default_agent(config_data: dict):
+def create_default_agent(config_data: dict, user_name: str = ""):
     """Create the default 'alfred' agent — always present from first setup."""
     from core.config import _load_config, _save_config, config
     from core.workspace import create_workspace
     from core.tools import ToolRegistry, register_builtin_tools
     from core.tool_discovery import discover_shared_tools
+    from datetime import datetime
 
     console.print(Rule("[bold]Default Agent", style="cyan"))
     console.print()
-    console.print("  Creating your default agent: [bold cyan]alfred[/]")
+    console.print("  Creating your default agent: [bold cyan]Alfred[/]")
     console.print("  [dim]He'll be available in all channels unless you assign a specialist.[/]")
     console.print()
 
@@ -452,9 +453,19 @@ def create_default_agent(config_data: dict):
     except Exception:
         pass  # Shared tools are optional
 
-    # Create workspace
+    # Birthday = today
+    birthday_iso = datetime.now().strftime("%Y-%m-%d")
+    birthday_human = datetime.now().strftime("%B %d, %Y")
+
+    # Create workspace with identity baked in
     workspace_path = str(config.PROJECT_ROOT / "workspaces" / "alfred")
-    created = create_workspace(workspace_path, "alfred", registry=registry)
+    created = create_workspace(
+        workspace_path, "Alfred",
+        registry=registry,
+        creator=user_name,
+        birthday=birthday_human,
+        user_name=user_name,
+    )
     if created:
         for f in created:
             console.print(f"    [dim]{f}[/]")
@@ -468,12 +479,15 @@ def create_default_agent(config_data: dict):
         "workspace": "workspaces/alfred",
         "description": "General-purpose assistant — your default agent",
         "status": "active",
+        "birthday": birthday_iso,
+        "creator": user_name,
     }
     _save_config(cfg)
 
-    console.print(f"\n  [green]✓[/] Agent [bold]alfred[/] ready")
-    console.print(f"    Chat: [bold]alfred agent chat alfred[/]")
-    console.print(f"    Rename: edit alfred.json or create a new agent")
+    console.print(f"\n  [green]✓[/] Agent [bold]Alfred[/] ready")
+    console.print(f"    Born: [bold]{birthday_human}[/]")
+    if user_name:
+        console.print(f"    Creator: [bold]{user_name}[/]")
     console.print()
 
 
@@ -510,10 +524,16 @@ def run_setup():
     # Step 6: Write config
     config_data = write_config(providers_config, default, embeddings)
 
-    # Step 7: Create default "alfred" agent
-    create_default_agent(config_data)
+    # Step 7: Get user's name (used as agent creator + USER.md)
+    console.print()
+    console.print(Rule("[bold]About You", style="cyan"))
+    console.print()
+    user_name = Prompt.ask("  Your name", default="")
 
-    # Step 8: Summary
+    # Step 8: Create default "alfred" agent
+    create_default_agent(config_data, user_name=user_name)
+
+    # Step 9: Summary
     print_summary(config_data)
 
 

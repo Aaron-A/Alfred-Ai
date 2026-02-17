@@ -15,6 +15,8 @@ class LLMClient:
     """
     Unified LLM client supporting multiple providers.
 
+    Supports automatic fallback to a secondary provider if the primary fails.
+
     Providers:
         - anthropic: Claude (Sonnet, Opus, Haiku)
         - xai: Grok (grok-4, grok-4-fast, etc.)
@@ -46,6 +48,11 @@ class LLMClient:
         self.base_url = base_url or self.PROVIDER_URLS.get(self.provider, "")
         self._anthropic_client = None
 
+        # Secondary (fallback) provider — loaded from config
+        self._secondary_provider = config.LLM_SECONDARY_PROVIDER
+        self._secondary_model = config.LLM_SECONDARY_MODEL
+        self._secondary_client = None
+
     @property
     def anthropic_client(self):
         """Lazy-load Anthropic SDK client."""
@@ -64,6 +71,7 @@ class LLMClient:
     ) -> str:
         """
         Send a prompt and get a response. Works with any configured provider.
+        Automatically falls back to the secondary provider if the primary fails.
 
         Args:
             prompt: The user message
@@ -80,17 +88,47 @@ class LLMClient:
             messages.extend(context)
         messages.append({"role": "user", "content": prompt})
 
-        if self.provider == "anthropic":
-            return self._ask_anthropic(messages, system, max_tokens, temperature)
-        elif self.provider in self.OPENAI_COMPATIBLE:
-            return self._ask_openai_compatible(messages, system, max_tokens, temperature)
-        else:
-            raise ValueError(f"Unknown provider: {self.provider}")
+        try:
+            return self._call_provider(
+                self.provider, self.model, messages, system, max_tokens, temperature
+            )
+        except Exception as primary_error:
+            # If secondary is configured, try it
+            if self._secondary_provider and self._secondary_provider != self.provider:
+                print(f"[alfred] Primary LLM failed ({self.provider}): {primary_error}")
+                print(f"[alfred] Falling back to secondary: {self._secondary_provider}/{self._secondary_model}")
+                try:
+                    return self._call_provider(
+                        self._secondary_provider, self._secondary_model,
+                        messages, system, max_tokens, temperature,
+                    )
+                except Exception as secondary_error:
+                    raise RuntimeError(
+                        f"Both LLM providers failed.\n"
+                        f"  Primary ({self.provider}): {primary_error}\n"
+                        f"  Secondary ({self._secondary_provider}): {secondary_error}"
+                    ) from secondary_error
+            else:
+                raise
 
-    def _ask_anthropic(self, messages, system, max_tokens, temperature) -> str:
+    def _call_provider(
+        self, provider: str, model: str, messages, system, max_tokens, temperature,
+    ) -> str:
+        """Route a call to the correct provider backend."""
+        if provider == "anthropic":
+            return self._ask_anthropic(messages, system, max_tokens, temperature, model=model)
+        elif provider in self.OPENAI_COMPATIBLE:
+            return self._ask_openai_compatible(
+                messages, system, max_tokens, temperature,
+                provider=provider, model=model,
+            )
+        else:
+            raise ValueError(f"Unknown provider: {provider}")
+
+    def _ask_anthropic(self, messages, system, max_tokens, temperature, model=None) -> str:
         """Call Anthropic's native Messages API."""
         kwargs = {
-            "model": self.model,
+            "model": model or self.model,
             "max_tokens": max_tokens,
             "messages": messages,
             "temperature": temperature,
@@ -101,9 +139,15 @@ class LLMClient:
         response = self.anthropic_client.messages.create(**kwargs)
         return response.content[0].text
 
-    def _ask_openai_compatible(self, messages, system, max_tokens, temperature) -> str:
+    def _ask_openai_compatible(
+        self, messages, system, max_tokens, temperature,
+        provider=None, model=None,
+    ) -> str:
         """Call OpenAI-compatible /v1/chat/completions (works for xAI, OpenAI, Ollama)."""
-        url = f"{self.base_url}/v1/chat/completions"
+        provider = provider or self.provider
+        model = model or self.model
+        base_url = self.PROVIDER_URLS.get(provider, self.base_url)
+        url = f"{base_url}/v1/chat/completions"
 
         # Prepend system message if provided
         all_messages = []
@@ -112,7 +156,7 @@ class LLMClient:
         all_messages.extend(messages)
 
         payload = {
-            "model": self.model,
+            "model": model,
             "messages": all_messages,
             "max_tokens": max_tokens,
             "temperature": temperature,
@@ -123,9 +167,10 @@ class LLMClient:
             "User-Agent": "Alfred-AI/1.0",
         }
 
-        # Ollama doesn't need auth, others do
-        if self.api_key and self.provider != "ollama":
-            headers["Authorization"] = f"Bearer {self.api_key}"
+        # Get API key for the target provider (may differ from self for fallback)
+        api_key = config.get_api_key(provider) if provider != self.provider else self.api_key
+        if api_key and provider != "ollama":
+            headers["Authorization"] = f"Bearer {api_key}"
 
         data = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(url, data=data, headers=headers, method="POST")
@@ -138,7 +183,7 @@ class LLMClient:
             body = e.read().decode("utf-8", errors="replace")
             raise RuntimeError(f"LLM API error ({e.code}): {body}") from e
         except urllib.error.URLError as e:
-            if self.provider == "ollama":
+            if provider == "ollama":
                 raise RuntimeError(
                     "Ollama not reachable at localhost:11434. "
                     "Is Ollama running? Start it with: ollama serve"

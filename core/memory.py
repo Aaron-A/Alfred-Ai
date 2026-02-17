@@ -28,7 +28,7 @@ class MemoryStore:
     - Store typed memory records with automatic embedding
     - Semantic search (vector similarity)
     - Metadata filtering (exact match on structured fields)
-    - Hybrid search (vector + full-text, when available)
+    - Hybrid search (vector + BM25 full-text via LanceDB FTS index)
     - Update and delete records
     """
 
@@ -39,6 +39,7 @@ class MemoryStore:
         self.db = lancedb.connect(self.db_path)
         self.embedder = get_embedding_engine()
         self._tables: dict[str, lancedb.table.Table] = {}
+        self._fts_indexed: set[str] = set()  # Tables that have FTS indexes
 
     def _table_name(self, memory_type: str) -> str:
         """Generate table name from memory type."""
@@ -132,6 +133,29 @@ class MemoryStore:
 
         return all_ids
 
+    def _ensure_fts_index(self, table, table_name: str):
+        """
+        Create a full-text search index on the 'content' column if not already done.
+        FTS indexes are required for hybrid search (vector + BM25).
+        """
+        if table_name in self._fts_indexed:
+            return True
+
+        try:
+            # Check if the table has a 'content' column (all memory records do)
+            schema_names = [f.name for f in table.schema]
+            if "content" not in schema_names:
+                return False
+
+            # Create FTS index — replace if it already exists (handles schema changes)
+            table.create_fts_index("content", replace=True)
+            self._fts_indexed.add(table_name)
+            return True
+        except Exception as e:
+            # FTS creation can fail on empty tables or unsupported configs
+            # Fall back to vector-only search silently
+            return False
+
     def search(
         self,
         query: str,
@@ -140,7 +164,11 @@ class MemoryStore:
         where: str = None,
     ) -> list[dict]:
         """
-        Semantic search across memories.
+        Search across memories using hybrid (vector + BM25) or vector-only search.
+
+        If hybrid search is enabled in config and an FTS index exists,
+        combines vector similarity with keyword matching for better recall.
+        Falls back to vector-only search if hybrid isn't available.
 
         Args:
             query: Natural language search query
@@ -150,10 +178,13 @@ class MemoryStore:
             where: SQL-like filter string (e.g., "symbol = 'TSLA' AND outcome = 'win'")
 
         Returns:
-            List of dicts with memory fields + _distance score
+            List of dicts with memory fields + _relevance_score (hybrid) or _distance (vector)
         """
         top_k = top_k or config.DEFAULT_TOP_K
         query_vector = self.embedder.embed_query(query)
+
+        # Check if hybrid search is enabled in config
+        use_hybrid = getattr(config, 'HYBRID_VECTOR_WEIGHT', 0) > 0
 
         results = []
 
@@ -170,13 +201,37 @@ class MemoryStore:
         for table_name in table_names:
             try:
                 table = self.db.open_table(table_name)
-                search = table.search(query_vector).limit(top_k)
 
+                # Try hybrid search first if enabled
+                if use_hybrid and self._ensure_fts_index(table, table_name):
+                    try:
+                        search = (
+                            table.search(query_type="hybrid")
+                            .text(query)
+                            .vector(query_vector)
+                            .limit(top_k)
+                        )
+                        if where:
+                            search = search.where(where)
+                        table_results = search.to_list()
+
+                        # Normalize: hybrid returns _relevance_score (higher = better)
+                        # Convert to _distance equivalent for consistent downstream usage
+                        for r in table_results:
+                            if "_relevance_score" in r and "_distance" not in r:
+                                r["_distance"] = 1.0 - min(r["_relevance_score"], 1.0)
+                        results.extend(table_results)
+                        continue  # Success — skip vector-only fallback
+                    except Exception:
+                        pass  # Fall through to vector-only
+
+                # Vector-only search (fallback)
+                search = table.search(query_vector).limit(top_k)
                 if where:
                     search = search.where(where)
-
                 table_results = search.to_list()
                 results.extend(table_results)
+
             except Exception as e:
                 print(f"[alfred] Warning: search failed on {table_name}: {e}")
 
@@ -197,7 +252,6 @@ class MemoryStore:
     def update(self, record_id: str, memory_type: str, updates: dict) -> bool:
         """
         Update fields on an existing record.
-        Re-embeds if content-related fields change.
 
         Args:
             record_id: The record ID to update
@@ -211,25 +265,19 @@ class MemoryStore:
         try:
             table = self.db.open_table(table_name)
 
-            # Build SET clause for update
-            update_pairs = []
-            for key, value in updates.items():
-                if key in ("id", "vector"):
-                    continue
-                if isinstance(value, str):
-                    update_pairs.append(f"{key} = '{value}'")
-                elif isinstance(value, (int, float)):
-                    update_pairs.append(f"{key} = {value}")
+            # Filter out protected fields
+            clean_updates = {
+                k: v for k, v in updates.items()
+                if k not in ("id", "vector")
+            }
 
-            if not update_pairs:
+            if not clean_updates:
                 return False
 
             # Add updated_at timestamp
-            now = datetime.now(timezone.utc).isoformat()
-            update_pairs.append(f"updated_at = '{now}'")
+            clean_updates["updated_at"] = datetime.now(timezone.utc).isoformat()
 
-            update_sql = ", ".join(update_pairs)
-            table.update(where=f"id = '{record_id}'", values=updates)
+            table.update(where=f"id = '{record_id}'", values=clean_updates)
             return True
         except Exception as e:
             print(f"[alfred] Update failed: {e}")

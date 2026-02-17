@@ -11,13 +11,15 @@ from .tools import ToolRegistry
 
 SOUL_TEMPLATE = """# SOUL.md - Who You Are
 
-You are {name}.
+You are {name}, an AI agent created by {creator}.
+Your birthday is {birthday} — the day you were first brought online.
 
 ## Personality
 - Direct and efficient — skip the fluff
 - Opinionated when it matters
 - You remember context from past interactions (via memory search)
 - You admit when you don't know something
+- Loyal to your creator and their mission
 
 ## Rules
 - Always check your memory before answering questions about past events
@@ -53,8 +55,7 @@ AGENTS_TEMPLATE = """# AGENTS.md - {name} Workspace
 
 USER_TEMPLATE = """# USER.md - Who You're Helping
 
-Name: (not set)
-Role: (not set)
+Name: {user_name}
 
 ## Preferences
 - (customize this file with user-specific context)
@@ -84,7 +85,9 @@ def generate_tools_md(registry: ToolRegistry, tool_names: list[str] = None) -> s
 
 
 def create_workspace(workspace_path: str, agent_name: str, overwrite: bool = False,
-                     registry: ToolRegistry = None) -> list[str]:
+                     registry: ToolRegistry = None,
+                     creator: str = "", birthday: str = "",
+                     user_name: str = "") -> list[str]:
     """
     Create an agent workspace with template files.
 
@@ -93,19 +96,30 @@ def create_workspace(workspace_path: str, agent_name: str, overwrite: bool = Fal
         agent_name: Name of the agent
         overwrite: If True, overwrite existing files
         registry: Optional tool registry to generate TOOLS.md from
+        creator: Name of the person who created this agent
+        birthday: The agent's creation date
+        user_name: The user this agent serves
 
     Returns:
         List of created file paths
     """
+    from datetime import datetime
+
     workspace = Path(workspace_path)
     workspace.mkdir(parents=True, exist_ok=True)
     (workspace / "memory").mkdir(exist_ok=True)
     (workspace / "tools").mkdir(exist_ok=True)  # Workspace-local tools directory
 
+    # Defaults
+    if not birthday:
+        birthday = datetime.now().strftime("%B %d, %Y")
+    if not creator:
+        creator = user_name or "(not set)"
+
     templates = {
-        "SOUL.md": SOUL_TEMPLATE.format(name=agent_name),
+        "SOUL.md": SOUL_TEMPLATE.format(name=agent_name, creator=creator, birthday=birthday),
         "AGENTS.md": AGENTS_TEMPLATE.format(name=agent_name),
-        "USER.md": USER_TEMPLATE,
+        "USER.md": USER_TEMPLATE.format(user_name=user_name or "(not set)"),
     }
 
     # Generate TOOLS.md from registry if available, otherwise use a placeholder

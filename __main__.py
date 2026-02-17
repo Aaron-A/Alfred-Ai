@@ -4,7 +4,10 @@ Run with: alfred <command>
 
 Commands:
     setup              - Interactive setup wizard
-    status             - Show current configuration
+    start              - Start Alfred (Discord bot + services)
+    stop               - Stop Alfred
+    status             - Show current configuration and running state
+    logs               - Tail the Alfred log file
 
     provider add       - Add an LLM provider
     models update      - Fetch latest models from provider APIs
@@ -26,7 +29,6 @@ Commands:
     agent schedule remove - Remove a scheduled task
 
     discord setup      - Configure Discord bot (token, guild, channel→agent mapping)
-    discord start      - Start the Discord bot (foreground, Ctrl+C to stop)
     discord status     - Show current Discord configuration
 
     demo               - Run the memory demo
@@ -47,7 +49,11 @@ Usage: alfred <command>
 
 Commands:
     setup                               Interactive setup wizard
-    status                              Show configuration and provider status
+    start                               Start Alfred (background daemon)
+    start --fg                          Start in foreground (Ctrl+C to stop)
+    stop                                Stop Alfred
+    status                              Show configuration and running state
+    logs                                Tail the log file
 
     provider add <name>                 Add an LLM provider (anthropic, xai, openai, ollama)
 
@@ -70,24 +76,20 @@ Commands:
                                         (omit name for global view, add name for agent-specific)
 
     discord setup                       Configure Discord bot (token, channels, agents)
-    discord start                       Start the Discord bot (Ctrl+C to stop)
     discord status                      Show Discord configuration
 
     demo                                Run the memory layer demo
 
 Examples:
     alfred setup                                    # First-time setup
+    alfred start                                    # Start Alfred (Discord bot, etc.)
+    alfred stop                                     # Stop Alfred
+    alfred status                                   # Check what's running
+    alfred logs                                     # Watch the log
     alfred provider add anthropic                   # Add Claude as a provider
-    alfred models update                            # Fetch latest model lists
     alfred agent create trader                      # Create a trading agent
     alfred agent chat trader                        # Chat with it
-    alfred agent pause trader                       # Pause the agent
-    alfred agent schedule add trader                # Add a cron task
-    alfred agent schedule list                      # View all schedules
-    alfred tools list                               # List all available tools
-    alfred tools list trader                        # List tools for a specific agent
-    alfred discord setup                            # Configure Discord bot
-    alfred discord start                            # Start Discord bot
+    alfred discord setup                            # Configure Discord channels
 """)
 
 
@@ -177,15 +179,23 @@ def cmd_status():
     # Discord
     discord_cfg = cfg.get("discord", {})
     if discord_cfg.get("bot_token"):
+        from core.discord import is_bot_running
+        pid = is_bot_running()
         channels = discord_cfg.get("channels", {})
         channel_list = ", ".join(
             f"#{c.get('name', '?')}→{c.get('agent', '?')}"
             for c in channels.values()
         )
+        if pid:
+            status_str = f"[bold green]running[/] (PID {pid})"
+        elif channels:
+            status_str = f"[dim]stopped[/] — {channel_list}"
+        else:
+            status_str = "[yellow]no channels[/]"
         table.add_row(
             "Discord Bot",
             f"{len(channels)} channel(s)",
-            f"[green]{channel_list}[/]" if channels else "[yellow]no channels[/]",
+            status_str,
         )
     else:
         table.add_row("Discord Bot", "not configured", "[dim]run: alfred discord setup[/]")
@@ -620,9 +630,13 @@ def cmd_agent_chat(name: str):
     agent = manager.get(name)
 
     console.print()
+    session = agent.session_info
+    session_status = ""
+    if session["turns"] > 0:
+        session_status = f" | [green]{session['turns']} turns restored[/]"
     console.print(Panel(
         f"[bold cyan]{name}[/] | {agent.llm.provider}/{agent.llm.model} | "
-        f"{len(agent._get_available_tools())} tools\n"
+        f"{len(agent._get_available_tools())} tools{session_status}\n"
         f"[dim]Type 'quit' to exit, 'reset' to clear history[/]",
         title="Alfred Agent Chat",
         border_style="cyan",
@@ -1192,7 +1206,7 @@ def cmd_tools_list(agent_name: str = None):
 def _discord_discover(token: str, guild_id: str = None) -> dict:
     """
     Briefly connect to Discord to discover guilds and optionally channels.
-    Single connection, clean shutdown — no unclosed connector warnings.
+    Single connection, clean shutdown.
 
     Returns {"guilds": [{id, name}, ...], "channels": [{id, name, category}, ...]}
     """
@@ -1232,16 +1246,28 @@ def _discord_discover(token: str, guild_id: str = None) -> dict:
         except Exception:
             pass
         finally:
-            # Clean up any remaining aiohttp connectors
+            # Give aiohttp time to close connectors cleanly
             try:
-                if hasattr(client, 'http') and client.http and not client.http.connector.closed:
-                    await client.http.connector.close()
+                await asyncio.sleep(0.25)
+                if hasattr(client, 'http') and client.http:
+                    if hasattr(client.http, 'connector') and client.http.connector and not client.http.connector.closed:
+                        await client.http.connector.close()
+                    # Also close the websocket connector if present
+                    if hasattr(client, 'ws') and client.ws and hasattr(client.ws, 'socket'):
+                        await client.ws.socket.close()
             except Exception:
                 pass
+            # Final sleep to let the event loop clean up
+            await asyncio.sleep(0.1)
 
+    # Suppress ResourceWarning from aiohttp's garbage-collected connectors
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", ResourceWarning)
+        # Also suppress at the warnings module level for the gc finalizer
+        import gc
+        gc.collect()  # Clean up before
         asyncio.run(_discover())
+        gc.collect()  # Clean up after — but warnings are suppressed
 
     return result
 
@@ -1425,34 +1451,150 @@ def cmd_discord_setup():
     console.print(f"  Start it: [bold]alfred discord start[/]\n")
 
 
-def cmd_discord_start():
-    """Start the Discord bot (foreground, Ctrl+C to stop)."""
+def cmd_start(foreground: bool = False, _daemon_child: bool = False):
+    """Start Alfred — launches all configured services (Discord bot, etc.)."""
+    import json
+    import subprocess
+    from pathlib import Path
     from rich.console import Console
-    from core.config import CONFIG_FILE, _load_config
 
     console = Console()
 
-    if not CONFIG_FILE.exists():
+    # Read config without importing heavy core modules (lancedb is not fork-safe)
+    config_path = Path(__file__).parent / "alfred.json"
+    if not config_path.exists():
         console.print("\n  [yellow]Run 'alfred setup' first.[/]\n")
         return
 
-    cfg = _load_config()
+    with open(config_path) as f:
+        cfg = json.load(f)
+
     discord_cfg = cfg.get("discord", {})
+    has_discord = discord_cfg.get("bot_token") and discord_cfg.get("channels")
 
-    if not discord_cfg.get("bot_token"):
-        console.print("\n  [yellow]Discord not configured.[/]")
-        console.print("  Run: [bold]alfred discord setup[/]\n")
+    if not has_discord:
+        console.print("\n  [yellow]Nothing to start.[/]")
+        console.print("  Set up Discord first: [bold]alfred discord setup[/]\n")
         return
 
-    channels = discord_cfg.get("channels", {})
-    if not channels:
-        console.print("\n  [yellow]No channels configured.[/]")
-        console.print("  Run: [bold]alfred discord setup[/]\n")
+    # Check PID file (skip if we ARE the daemon child)
+    pid_file = Path(__file__).parent / "data" / "discord.pid"
+    if not _daemon_child and pid_file.exists():
+        try:
+            existing_pid = int(pid_file.read_text().strip())
+            os.kill(existing_pid, 0)  # Check if alive
+            console.print(f"\n  [yellow]Alfred is already running (PID {existing_pid}).[/]")
+            console.print("  Stop it first: [bold]alfred stop[/]\n")
+            return
+        except (ValueError, ProcessLookupError, PermissionError):
+            pid_file.unlink(missing_ok=True)
+
+    if foreground or _daemon_child:
+        # Direct run — import and start services
+        from core.discord import DiscordBot
+
+        # Start the scheduler (background thread — runs cron tasks on agents)
+        from core.scheduler import Scheduler
+        from core.agent import Agent, AgentConfig
+        from core.config import _load_config as _reload_config
+        from pathlib import Path as _Path
+
+        def _run_agent_task(agent_name: str, task: str) -> str:
+            """Scheduler callback — creates an agent and runs a task."""
+            _cfg = _reload_config()
+            agent_data = _cfg.get("agents", {}).get(agent_name)
+            if not agent_data:
+                raise ValueError(f"Agent '{agent_name}' not found")
+
+            agent_data = dict(agent_data)
+            agent_data["name"] = agent_name
+
+            from core.config import config as _config
+            workspace = _Path(agent_data.get("workspace", f"workspaces/{agent_name}"))
+            if not workspace.is_absolute():
+                workspace = _config.PROJECT_ROOT / workspace
+            agent_data["workspace"] = str(workspace)
+            workspace.mkdir(parents=True, exist_ok=True)
+
+            agent_config = AgentConfig.from_dict(agent_data)
+            agent = Agent(agent_config)
+            return agent.run(task)
+
+        scheduler = Scheduler(agent_runner=_run_agent_task)
+        scheduler.start()
+
+        bot = DiscordBot()
+
+        if not _daemon_child:
+            channels = discord_cfg.get("channels", {})
+            channel_list = ", ".join(f"#{c.get('name', '?')}" for c in channels.values())
+            console.print(f"\n  Discord: {channel_list}\n")
+
+        try:
+            bot.run(foreground=not _daemon_child)
+        finally:
+            scheduler.stop()
+    else:
+        # Daemon mode — spawn a clean subprocess (lancedb is not fork-safe)
+        data_dir = Path(__file__).parent / "data"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        log_file = data_dir / "discord.log"
+
+        # Find the alfred launcher script
+        alfred_script = Path(__file__).parent / "alfred"
+
+        lf = open(log_file, "a")
+        proc = subprocess.Popen(
+            [str(alfred_script), "start", "--daemon-child"],
+            stdout=lf,
+            stderr=lf,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,  # Fully detach from terminal
+        )
+        lf.close()
+
+        # Write PID file
+        pid_file.write_text(str(proc.pid))
+
+        console.print(f"\n  Alfred started (PID {proc.pid})")
+        console.print(f"  Logs:   alfred logs")
+        console.print(f"  Status: alfred status")
+        console.print(f"  Stop:   alfred stop\n")
+
+
+def cmd_stop():
+    """Stop Alfred — shuts down all running services."""
+    from rich.console import Console
+    from core.discord import stop_bot, is_bot_running
+
+    console = Console()
+
+    pid = is_bot_running()
+    if pid is None:
+        console.print("\n  [dim]Alfred is not running.[/]\n")
         return
 
-    from core.discord import DiscordBot
-    bot = DiscordBot()
-    bot.run()
+    console.print(f"\n  Stopping Alfred (PID {pid})...")
+    if stop_bot():
+        console.print("  [green]Stopped.[/]\n")
+    else:
+        console.print(f"  [red]Failed to stop. Try: kill {pid}[/]\n")
+
+
+def cmd_logs():
+    """Tail the Alfred log file."""
+    from core.discord import LOG_FILE
+    import subprocess
+
+    if not LOG_FILE.exists():
+        print("\n  No log file yet. Start Alfred first: alfred start\n")
+        return
+
+    print(f"  Tailing {LOG_FILE} (Ctrl+C to stop)\n")
+    try:
+        subprocess.run(["tail", "-f", str(LOG_FILE)])
+    except KeyboardInterrupt:
+        print()
 
 
 def cmd_discord_status():
@@ -1513,8 +1655,7 @@ def cmd_discord_status():
     else:
         console.print("\n  [yellow]No channels mapped.[/]")
 
-    console.print(f"\n  [dim]Reconfigure: alfred discord setup[/]")
-    console.print(f"  [dim]Start bot:   alfred discord start[/]\n")
+    console.print(f"\n  [dim]Reconfigure: alfred discord setup[/]\n")
 
 
 # ─── Main Router ─────────────────────────────────────────────────
@@ -1655,23 +1796,38 @@ def main():
             print("Available: update, list")
         return
 
+    # Handle 'start' command
+    if command == "start":
+        foreground = "--fg" in sys.argv[2:] or "--foreground" in sys.argv[2:]
+        daemon_child = "--daemon-child" in sys.argv[2:]
+        cmd_start(foreground=foreground, _daemon_child=daemon_child)
+        return
+
+    # Handle 'stop' command
+    if command == "stop":
+        cmd_stop()
+        return
+
+    # Handle 'logs' command
+    if command == "logs":
+        cmd_logs()
+        return
+
     # Handle 'discord' subcommands
     if command == "discord":
         if len(sys.argv) < 3:
-            print("Usage: alfred discord <setup|start|status>")
+            print("Usage: alfred discord <setup|status>")
             return
 
         subcmd = sys.argv[2].lower()
 
         if subcmd == "setup":
             cmd_discord_setup()
-        elif subcmd == "start":
-            cmd_discord_start()
         elif subcmd == "status":
             cmd_discord_status()
         else:
             print(f"Unknown discord command: {subcmd}")
-            print("Available: setup, start, status")
+            print("Available: setup, status")
         return
 
     commands = {

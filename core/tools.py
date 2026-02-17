@@ -345,3 +345,154 @@ def register_builtin_tools(registry: ToolRegistry):
         ],
         category="system",
     )
+
+    # ─── Multi-Agent Delegation ──────────────────────────────
+
+    def delegate_to(agent_name: str, task: str) -> str:
+        """
+        Delegate a task to another agent and get back the result.
+
+        This creates a fresh agent instance, runs the task, and returns the response.
+        Use this when a task falls outside your expertise or when another agent
+        is better suited (e.g., delegate trading analysis to the trader agent).
+        """
+        from .agent import Agent, AgentConfig
+        from .config import _load_config, config as cfg_obj
+
+        full_cfg = _load_config()
+        agents_cfg = full_cfg.get("agents", {})
+
+        if agent_name not in agents_cfg:
+            available = list(agents_cfg.keys())
+            return f"Error: Agent '{agent_name}' not found. Available agents: {available}"
+
+        agent_data = dict(agents_cfg[agent_name])
+        agent_data["name"] = agent_name
+
+        # Resolve workspace
+        from pathlib import Path
+        workspace = Path(agent_data.get("workspace", f"workspaces/{agent_name}"))
+        if not workspace.is_absolute():
+            workspace = cfg_obj.PROJECT_ROOT / workspace
+        agent_data["workspace"] = str(workspace)
+
+        # Check agent status
+        if agent_data.get("status") == "paused":
+            return f"Error: Agent '{agent_name}' is paused."
+
+        try:
+            agent_config = AgentConfig.from_dict(agent_data)
+            agent = Agent(agent_config, session_id="delegation")
+            response = agent.run(task)
+            return f"[{agent_name}] {response}"
+        except Exception as e:
+            return f"Error delegating to '{agent_name}': {e}"
+
+    registry.register_function(
+        name="delegate_to",
+        description=(
+            "Delegate a task to another agent and get back the result. "
+            "Use when a task is better handled by a specialized agent "
+            "(e.g., trading analysis to 'trader', social posts to 'social'). "
+            "The other agent will process the task and return its response."
+        ),
+        fn=delegate_to,
+        parameters=[
+            ToolParameter("agent_name", "string", "Name of the agent to delegate to (e.g., 'trader', 'social')"),
+            ToolParameter("task", "string", "The task description or question to send to the agent"),
+        ],
+        category="agents",
+    )
+
+    # ─── Agent-to-Agent Messaging ────────────────────────────
+
+    def send_message(to_agent: str, message: str, priority: str = "normal") -> str:
+        """
+        Send a message to another agent's inbox.
+
+        Unlike delegate_to, this is async — the message is queued and the
+        other agent will see it next time it processes. Use for notifications,
+        FYIs, or non-urgent handoffs.
+        """
+        from pathlib import Path
+        from .config import _load_config, config as cfg_obj
+        import json as _json
+        from datetime import datetime, timezone
+
+        full_cfg = _load_config()
+        agents_cfg = full_cfg.get("agents", {})
+
+        if to_agent not in agents_cfg:
+            available = list(agents_cfg.keys())
+            return f"Error: Agent '{to_agent}' not found. Available: {available}"
+
+        # Resolve target workspace
+        target_data = agents_cfg[to_agent]
+        workspace = Path(target_data.get("workspace", f"workspaces/{to_agent}"))
+        if not workspace.is_absolute():
+            workspace = cfg_obj.PROJECT_ROOT / workspace
+
+        inbox_file = workspace / "inbox.json"
+
+        # Load existing inbox
+        inbox = []
+        if inbox_file.exists():
+            try:
+                inbox = _json.loads(inbox_file.read_text())
+            except (ValueError, _json.JSONDecodeError):
+                inbox = []
+
+        # Add new message
+        inbox.append({
+            "from": "agent",  # Will be overridden by the calling context if needed
+            "message": message,
+            "priority": priority,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "read": False,
+        })
+
+        inbox_file.write_text(_json.dumps(inbox, indent=2, default=str))
+        return f"Message sent to {to_agent}'s inbox ({len(inbox)} total messages)"
+
+    registry.register_function(
+        name="send_message",
+        description=(
+            "Send an async message to another agent's inbox. The message is "
+            "queued and the other agent will see it next time it runs. "
+            "Use for notifications, status updates, or non-urgent handoffs. "
+            "For tasks that need an immediate response, use delegate_to instead."
+        ),
+        fn=send_message,
+        parameters=[
+            ToolParameter("to_agent", "string", "Name of the receiving agent"),
+            ToolParameter("message", "string", "The message content"),
+            ToolParameter("priority", "string", "Priority: low, normal, high (default: normal)", required=False),
+        ],
+        category="agents",
+    )
+
+    # ─── Inbox Check Tool ────────────────────────────────────
+
+    def check_inbox(mark_read: bool = True) -> str:
+        """Check your inbox for messages from other agents."""
+        import json as _json
+        from pathlib import Path
+        from .config import config as cfg_obj
+
+        # This will be called in the context of whatever agent is running
+        # We need to find the current agent's workspace — use a sentinel approach
+        # The inbox path is set when the tool is registered per-agent in agent._init_tools
+        return "Error: check_inbox requires agent context (use via agent tools)"
+
+    registry.register_function(
+        name="check_inbox",
+        description=(
+            "Check your inbox for messages from other agents. "
+            "Returns unread messages and optionally marks them as read."
+        ),
+        fn=check_inbox,
+        parameters=[
+            ToolParameter("mark_read", "boolean", "Mark messages as read after viewing (default: true)", required=False),
+        ],
+        category="agents",
+    )
