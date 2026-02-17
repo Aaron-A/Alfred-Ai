@@ -8,6 +8,9 @@ import time
 from typing import Union
 from sentence_transformers import SentenceTransformer
 from .config import config
+from .logging import get_logger
+
+logger = get_logger("embeddings")
 
 
 class EmbeddingEngine:
@@ -21,7 +24,7 @@ class EmbeddingEngine:
     def model(self) -> SentenceTransformer:
         """Lazy-load the model on first use."""
         if self._model is None:
-            print(f"[alfred] Loading embedding model: {self.model_name}")
+            logger.info(f"Loading embedding model: {self.model_name}")
             start = time.time()
             self._model = SentenceTransformer(
                 self.model_name,
@@ -29,7 +32,7 @@ class EmbeddingEngine:
                 cache_folder=str(config.MODELS_CACHE_DIR),
             )
             elapsed = time.time() - start
-            print(f"[alfred] Model loaded in {elapsed:.1f}s")
+            logger.info(f"Model loaded in {elapsed:.1f}s")
         return self._model
 
     @property

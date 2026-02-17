@@ -9,6 +9,9 @@ import urllib.request
 import urllib.error
 from typing import Optional
 from .config import config
+from .logging import get_logger
+
+logger = get_logger("llm")
 
 
 class LLMClient:
@@ -95,8 +98,8 @@ class LLMClient:
         except Exception as primary_error:
             # If secondary is configured, try it
             if self._secondary_provider and self._secondary_provider != self.provider:
-                print(f"[alfred] Primary LLM failed ({self.provider}): {primary_error}")
-                print(f"[alfred] Falling back to secondary: {self._secondary_provider}/{self._secondary_model}")
+                logger.warning(f"Primary LLM failed ({self.provider}): {primary_error}")
+                logger.info(f"Falling back to secondary: {self._secondary_provider}/{self._secondary_model}")
                 try:
                     return self._call_provider(
                         self._secondary_provider, self._secondary_model,

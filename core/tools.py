@@ -248,17 +248,35 @@ def get_tool_registry() -> ToolRegistry:
 
 # ─── Built-in Tools ─────────────────────────────────────────────
 
-def register_builtin_tools(registry: ToolRegistry):
-    """Register Alfred's built-in tools."""
+def register_builtin_tools(registry: ToolRegistry, agent_id: str = None,
+                           memory_shared: bool = False):
+    """
+    Register Alfred's built-in tools.
 
-    # Memory search tool (agents can search their own memories)
-    # Note: imports are deferred to execution time so tool registration
-    # doesn't fail if heavy dependencies (lancedb) aren't installed
+    Args:
+        registry: The tool registry to register into.
+        agent_id: The owning agent's name. When set, memory tools are scoped
+                  to this agent — searches only return this agent's memories,
+                  and stores are tagged with this agent_id.
+                  When None, no isolation (legacy/global behavior).
+        memory_shared: If True, also register a memory_search_global tool
+                       that searches across all agents' memories.
+    """
+
+    # ─── Memory Tools (agent-scoped by default) ──────────────
+
     def memory_search(query: str, memory_type: str = None, top_k: int = 5) -> str:
-        """Search agent memory for relevant context."""
+        """Search your own memory for relevant context."""
         from .memory import MemoryStore
-        store = MemoryStore()
-        results = store.search(query=query, memory_type=memory_type or None, top_k=top_k)
+        store = MemoryStore(agent_id=agent_id or "default")
+
+        # Build agent_id filter so we only see our own memories
+        where = f"agent_id = '{agent_id}'" if agent_id else None
+
+        results = store.search(
+            query=query, memory_type=memory_type or None,
+            top_k=top_k, where=where,
+        )
         if not results:
             return "No relevant memories found."
         lines = []
@@ -282,16 +300,17 @@ def register_builtin_tools(registry: ToolRegistry):
         category="memory",
     )
 
-    # Memory store tool (agents can save new memories)
+    # Memory store tool (agents can save new memories, tagged with their agent_id)
     def memory_store(content: str, memory_type: str = "generic", tags: str = "") -> str:
         """Store a new memory."""
         from .memory import MemoryStore
         from models.base import MemoryRecord
-        store = MemoryStore()
+        store = MemoryStore(agent_id=agent_id or "default")
         record = MemoryRecord(
             content=content,
             memory_type=memory_type,
             tags=tags,
+            agent_id=agent_id or "default",
         )
         record_id = store.store(record)
         return f"Memory stored (id: {record_id})"
@@ -307,6 +326,52 @@ def register_builtin_tools(registry: ToolRegistry):
         ],
         category="memory",
     )
+
+    # ─── Cross-Agent Memory (only if memory_shared is enabled) ──
+
+    if memory_shared:
+        def memory_search_global(query: str, agent_filter: str = None,
+                                 memory_type: str = None, top_k: int = 5) -> str:
+            """Search across ALL agents' memories. Use when you need context
+            from another agent's experience or knowledge."""
+            from .memory import MemoryStore
+            store = MemoryStore(agent_id=agent_id or "default")
+
+            # Optional: filter to a specific agent's memories
+            where = f"agent_id = '{agent_filter}'" if agent_filter else None
+
+            results = store.search(
+                query=query, memory_type=memory_type or None,
+                top_k=top_k, where=where,
+            )
+            if not results:
+                return "No relevant memories found across agents."
+            lines = []
+            for r in results:
+                owner = r.get("agent_id", "?")
+                mtype = r.get("memory_type", "?")
+                content = r.get("content", "")
+                dist = r.get("_distance", 0)
+                relevance = max(0, 1 - dist)
+                lines.append(f"[{owner}/{mtype}] (relevance: {relevance:.0%}) {content[:200]}")
+            return "\n".join(lines)
+
+        registry.register_function(
+            name="memory_search_global",
+            description=(
+                "Search across ALL agents' memories — not just yours. "
+                "Use when you need context from another agent's experience, "
+                "knowledge, or past interactions. Optionally filter by agent name."
+            ),
+            fn=memory_search_global,
+            parameters=[
+                ToolParameter("query", "string", "Natural language search query"),
+                ToolParameter("agent_filter", "string", "Only search this agent's memories (optional)", required=False),
+                ToolParameter("memory_type", "string", "Filter to type: trade, macro, tweet, decision (optional)", required=False),
+                ToolParameter("top_k", "integer", "Number of results (default 5)", required=False),
+            ],
+            category="memory",
+        )
 
     # ─── Shell Command Tool (Three-Tier Security) ──────────────
     #

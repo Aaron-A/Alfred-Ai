@@ -119,6 +119,7 @@ alfred-ai/
     scheduler.py      Cron-based task scheduling
     discord.py        Discord bot + daemon management
     api.py            REST API server (FastAPI)
+    logging.py        Structured logging + agent metrics
   cli/
     setup.py          Interactive setup wizard
   models/
@@ -137,7 +138,7 @@ alfred-ai/
 - `AGENTS.md` — awareness of other agents
 - `TOOLS.md` — tool documentation and usage notes
 
-**Memory** is automatic. When an agent receives a message, it searches its vector store for relevant past context and injects it into the prompt. Hybrid search combines vector similarity (0.7 weight) with text matching (0.3 weight).
+**Memory** is automatic and isolated per agent. When an agent receives a message, it searches its own vector store for relevant past context and injects it into the prompt. Hybrid search combines vector similarity (0.7 weight) with text matching (0.3 weight). Agents with `memory_shared: true` also get a `memory_search_global` tool to search across all agents.
 
 **Tools** use a layered discovery system:
 1. **Builtin** — memory read/write, always available
@@ -220,6 +221,7 @@ GET  /v1/agents            List all agents
 GET  /v1/agents/{name}     Agent details + session info
 POST /v1/agents/{name}/reset  Reset an agent's session
 GET  /v1/status            System status
+GET  /v1/metrics           Agent activity metrics
 GET  /health               Health check
 ```
 

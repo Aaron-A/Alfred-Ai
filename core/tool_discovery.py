@@ -32,6 +32,10 @@ import importlib
 import importlib.util
 import sys
 import traceback
+
+from .logging import get_logger
+
+logger = get_logger("discovery")
 from pathlib import Path
 
 from .tools import ToolRegistry
@@ -91,10 +95,10 @@ def _discover_tools_from_dir(registry: ToolRegistry, tools_dir: Path, source: st
                 module.register(registry)
                 loaded.append(py_file.name)
             else:
-                print(f"  [discovery] Warning: {py_file.name} has no register() function, skipping")
+                logger.debug(f"{py_file.name} has no register() function, skipping")
 
         except Exception as e:
-            print(f"  [discovery] Error loading {py_file.name}: {e}")
+            logger.error(f"Error loading {py_file.name}: {e}")
             traceback.print_exc()
 
     return loaded

@@ -1314,6 +1314,9 @@ def cmd_api_start(host: str = "0.0.0.0", port: int = 7700):
     console.print(f"  Press Ctrl+C to stop.\n")
 
     from core.api import create_app
+    from core.logging import setup_logging
+
+    setup_logging(to_console=True, to_file=True)
 
     app = create_app()
     uvicorn.run(app, host=host, port=port, log_level="info")
@@ -1585,7 +1588,7 @@ def cmd_start(foreground: bool = False, _daemon_child: bool = False):
         # Daemon mode — spawn a clean subprocess (lancedb is not fork-safe)
         data_dir = Path(__file__).parent / "data"
         data_dir.mkdir(parents=True, exist_ok=True)
-        log_file = data_dir / "discord.log"
+        log_file = data_dir / "alfred.log"
 
         # Find the alfred launcher script
         alfred_script = Path(__file__).parent / "alfred"
@@ -1630,7 +1633,7 @@ def cmd_stop():
 
 def cmd_logs():
     """Tail the Alfred log file."""
-    from core.discord import LOG_FILE
+    from core.logging import LOG_FILE
     import subprocess
 
     if not LOG_FILE.exists():
@@ -1701,6 +1704,14 @@ def cmd_discord_status():
         console.print(table)
     else:
         console.print("\n  [yellow]No channels mapped.[/]")
+
+    # Rate limit config
+    rl_cfg = discord_cfg.get("rate_limit", {})
+    rl_msgs = rl_cfg.get("messages_per_minute", 5)
+    rl_window = rl_cfg.get("window_seconds", 60)
+    rl_cooldown = rl_cfg.get("cooldown_seconds", 30)
+    console.print(f"\n  Rate limit: [bold]{rl_msgs}[/] msgs / {rl_window}s window, {rl_cooldown}s cooldown")
+    console.print(f"  [dim](edit discord.rate_limit in alfred.json to customize)[/]")
 
     console.print(f"\n  [dim]Reconfigure: alfred discord setup[/]\n")
 

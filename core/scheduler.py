@@ -32,6 +32,10 @@ import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+
+from .logging import get_logger
+
+logger = get_logger("scheduler")
 from dataclasses import dataclass, field, asdict
 
 from .config import _load_config, _save_config
@@ -327,19 +331,19 @@ class Scheduler:
 
     def _execute_schedule(self, agent_name: str, schedule: Schedule):
         """Execute a scheduled task."""
-        print(f"  [scheduler] Running '{schedule.id}' for {agent_name}: {schedule.task[:60]}")
+        logger.info(f"Running '{schedule.id}' for {agent_name}: {schedule.task[:60]}")
 
         if self._runner:
             try:
                 result = self._runner(agent_name, schedule.task)
                 update_schedule_result(agent_name, schedule.id, "success")
-                print(f"  [scheduler] '{schedule.id}' completed")
+                logger.info(f"'{schedule.id}' completed")
             except Exception as e:
                 update_schedule_result(agent_name, schedule.id, f"error: {e}")
-                print(f"  [scheduler] '{schedule.id}' failed: {e}")
+                logger.error(f"'{schedule.id}' failed: {e}")
         else:
             update_schedule_result(agent_name, schedule.id, "no runner configured")
-            print(f"  [scheduler] No agent runner configured, skipping execution")
+            logger.warning(f"No agent runner configured, skipping execution")
 
 
 # ─── Convenience ─────────────────────────────────────────────────

@@ -29,6 +29,9 @@ from pydantic import BaseModel, Field
 
 from .config import config, _load_config, CONFIG_FILE
 from .agent import Agent, AgentConfig, AgentManager
+from .logging import metrics, setup_logging, get_logger
+
+logger = get_logger("api")
 
 
 # ─── Pydantic Models ────────────────────────────────────────
@@ -285,11 +288,15 @@ def create_app() -> FastAPI:
         loop = asyncio.get_event_loop()
 
         def _search():
-            store = MemoryStore(agent_id=req.agent_id or "default")
+            aid = req.agent_id or "default"
+            store = MemoryStore(agent_id=aid)
+            # Scope search to the requesting agent's memories
+            where = f"agent_id = '{aid}'" if req.agent_id else None
             return store.search(
                 query=req.query,
                 memory_type=req.memory_type,
                 top_k=req.top_k,
+                where=where,
             )
 
         try:
@@ -313,11 +320,13 @@ def create_app() -> FastAPI:
         loop = asyncio.get_event_loop()
 
         def _store():
-            store = MemoryStore(agent_id=req.agent_id or "default")
+            aid = req.agent_id or "default"
+            store = MemoryStore(agent_id=aid)
             record = MemoryRecord(
                 content=req.content,
                 memory_type=req.memory_type,
                 tags=req.tags,
+                agent_id=aid,
             )
             return store.store(record)
 
@@ -327,5 +336,14 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=500, detail=str(e))
 
         return MemoryResponse(id=record_id, message="Memory stored")
+
+    # ─── Metrics ──────────────────────────────────────────
+
+    @app.get("/v1/metrics")
+    async def get_metrics(agent: str = None):
+        """Get agent activity metrics (session-scoped)."""
+        if agent:
+            return {"agent": agent, "metrics": metrics.summary(agent)}
+        return metrics.snapshot()
 
     return app

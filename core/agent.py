@@ -30,6 +30,9 @@ from .config import config, _load_config
 from .llm import LLMClient
 from .memory import MemoryStore
 from .tools import ToolRegistry, get_tool_registry, register_builtin_tools
+from .logging import get_logger, metrics
+
+logger = get_logger("agent")
 
 
 @dataclass
@@ -51,6 +54,7 @@ class AgentConfig:
     memory_enabled: bool = True
     auto_memory_search: bool = True  # Automatically search memory before responding
     memory_search_top_k: int = 5
+    memory_shared: bool = False  # If True, agent can search across all agents' memories
 
     # Agent behavior
     max_tool_rounds: int = 10  # Max tool call iterations per turn
@@ -132,18 +136,24 @@ class Agent:
         6. Auto-generate TOOLS.md
         """
         # 1. Register builtins (memory_search, memory_store, run_command, delegate_to, send_message)
-        register_builtin_tools(self.registry)
+        #    Pass agent_id for memory isolation — each agent only sees its own memories.
+        #    Pass memory_shared to enable cross-agent memory search (memory_search_global).
+        register_builtin_tools(
+            self.registry,
+            agent_id=self.config.name,
+            memory_shared=self.config.memory_shared,
+        )
 
         # 2. Discover shared tools from tools/
         from .tool_discovery import discover_shared_tools, discover_workspace_tools
         shared = discover_shared_tools(self.registry)
         if shared:
-            print(f"  [tools] Loaded shared: {', '.join(shared)}")
+            logger.debug(f"Loaded shared tools: {', '.join(shared)}")
 
         # 3. Discover workspace-local tools
         workspace_tools = discover_workspace_tools(self.registry, str(self.workspace))
         if workspace_tools:
-            print(f"  [tools] Loaded workspace: {', '.join(workspace_tools)}")
+            logger.debug(f"Loaded workspace tools: {', '.join(workspace_tools)}")
 
         # 4. Register meta-tools (tool_list, tool_search, tool_create, tool_remove)
         from .tool_meta import register_meta_tools
@@ -278,7 +288,7 @@ class Agent:
         try:
             tools_file.write_text(tools_md)
         except Exception as e:
-            print(f"  [tools] Warning: Could not write TOOLS.md: {e}")
+            logger.warning(f"Could not write TOOLS.md: {e}")
 
     # ─── Session Persistence ─────────────────────────────────
 
@@ -331,10 +341,10 @@ class Agent:
 
             if valid:
                 turns = len(valid) // 2
-                print(f"  [session] Restored {turns} turn(s) from previous session")
+                logger.info(f"{self.config.name}: Restored {turns} turn(s) from previous session")
 
         except (json.JSONDecodeError, KeyError, TypeError) as e:
-            print(f"  [session] Warning: could not load session ({e}), starting fresh")
+            logger.warning(f"{self.config.name}: Could not load session ({e}), starting fresh")
             self._session_meta = {
                 "agent": self.config.name,
                 "started_at": datetime.now(timezone.utc).isoformat(),
@@ -363,7 +373,7 @@ class Agent:
             tmp_file.write_text(json.dumps(data, indent=2, default=str))
             tmp_file.rename(self._session_file)
         except Exception as e:
-            print(f"  [session] Warning: could not save session: {e}")
+            logger.warning(f"{self.config.name}: Could not save session: {e}")
             # Clean up temp file on failure
             tmp_file.unlink(missing_ok=True)
 
@@ -499,40 +509,56 @@ class Agent:
         Returns:
             Agent's response string
         """
-        # Step 1: Auto-search memory for relevant context
-        memory_context = ""
-        if self.config.auto_memory_search and self.memory:
-            memories = self.memory.search(
-                query=message,
-                top_k=self.config.memory_search_top_k,
-            )
-            if memories:
-                memory_context = self._format_memories(memories)
+        start_time = time.monotonic()
+        tool_call_count = 0
 
-        # Step 2: Build the full system prompt with memory
-        full_system = self.system_prompt
-        if memory_context:
-            full_system += f"\n\n## Relevant Memories (auto-recalled)\n{memory_context}"
+        try:
+            # Step 1: Auto-search memory for relevant context (scoped to this agent)
+            memory_context = ""
+            if self.config.auto_memory_search and self.memory:
+                memories = self.memory.search(
+                    query=message,
+                    top_k=self.config.memory_search_top_k,
+                    where=f"agent_id = '{self.config.name}'",
+                )
+                if memories:
+                    memory_context = self._format_memories(memories)
 
-        # Step 3: Determine if we're using tools
-        available_tools = self._get_available_tools()
-        use_tools = len(available_tools) > 0
+            # Step 2: Build the full system prompt with memory
+            full_system = self.system_prompt
+            if memory_context:
+                full_system += f"\n\n## Relevant Memories (auto-recalled)\n{memory_context}"
 
-        # Step 4: Run the LLM loop (may involve multiple tool calls)
-        if self.llm.provider == "anthropic":
-            response = self._run_anthropic_loop(message, full_system, available_tools)
-        else:
-            response = self._run_openai_loop(message, full_system, available_tools)
+            # Step 3: Determine if we're using tools
+            available_tools = self._get_available_tools()
+            use_tools = len(available_tools) > 0
 
-        # Step 5: Add to conversation history and persist
-        self.history.append({"role": "user", "content": message})
-        self.history.append({"role": "assistant", "content": response})
+            # Step 4: Run the LLM loop (may involve multiple tool calls)
+            if self.llm.provider == "anthropic":
+                response = self._run_anthropic_loop(message, full_system, available_tools)
+            else:
+                response = self._run_openai_loop(message, full_system, available_tools)
 
-        # Trim if we've grown past the window, then save to disk
-        self.history = self._trim_history(self.history)
-        self._save_session()
+            # Step 5: Add to conversation history and persist
+            self.history.append({"role": "user", "content": message})
+            self.history.append({"role": "assistant", "content": response})
 
-        return response
+            # Trim if we've grown past the window, then save to disk
+            self.history = self._trim_history(self.history)
+            self._save_session()
+
+            # Step 6: Record metrics
+            elapsed_ms = int((time.monotonic() - start_time) * 1000)
+            metrics.record_message(self.config.name, elapsed_ms=elapsed_ms, tool_calls=tool_call_count)
+            logger.info(f"{self.config.name}: responded in {elapsed_ms}ms")
+
+            return response
+
+        except Exception as e:
+            elapsed_ms = int((time.monotonic() - start_time) * 1000)
+            metrics.record_error(self.config.name, str(e))
+            logger.error(f"{self.config.name}: error after {elapsed_ms}ms: {e}")
+            raise
 
     def _run_anthropic_loop(self, message: str, system: str, tool_names: list[str]) -> str:
         """Agent loop using Anthropic's native tool_use API."""
@@ -565,7 +591,7 @@ class Agent:
                 tool_results = []
                 for block in assistant_content:
                     if block.type == "tool_use":
-                        print(f"  [tool] {block.name}({json.dumps(block.input)[:80]})")
+                        logger.info(f"{self.config.name}: tool {block.name}({json.dumps(block.input)[:80]})")
                         result = self.registry.execute(block.name, block.input)
                         tool_results.append({
                             "type": "tool_result",
@@ -636,7 +662,7 @@ class Agent:
                 for tc in msg["tool_calls"]:
                     fn_name = tc["function"]["name"]
                     fn_args = json.loads(tc["function"]["arguments"])
-                    print(f"  [tool] {fn_name}({json.dumps(fn_args)[:80]})")
+                    logger.info(f"{self.config.name}: tool {fn_name}({json.dumps(fn_args)[:80]})")
                     tool_result = self.registry.execute(fn_name, fn_args)
 
                     messages.append({

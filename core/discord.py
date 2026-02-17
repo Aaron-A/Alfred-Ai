@@ -17,16 +17,24 @@ import logging
 import os
 import signal
 import sys
+import time
 from typing import Optional
 from pathlib import Path
+from collections import defaultdict
 
 import discord
 from discord import Message, Thread
 
 from .config import _load_config, config
 from .agent import Agent, AgentConfig
+from .logging import get_logger, setup_logging
 
-logger = logging.getLogger("alfred.discord")
+logger = get_logger("discord")
+
+# Rate limit defaults
+DEFAULT_RATE_LIMIT_MESSAGES = 5      # messages per window
+DEFAULT_RATE_LIMIT_WINDOW = 60       # window in seconds
+DEFAULT_RATE_LIMIT_COOLDOWN = 30     # cooldown after hitting limit
 
 # PID and log file locations
 PID_FILE = config.PROJECT_ROOT / "data" / "discord.pid"
@@ -71,7 +79,6 @@ def stop_bot() -> bool:
     try:
         os.kill(pid, signal.SIGTERM)
         # Wait briefly for clean shutdown
-        import time
         for _ in range(20):  # 2 seconds max
             time.sleep(0.1)
             try:
@@ -87,12 +94,99 @@ def stop_bot() -> bool:
         return False
 
 
+class RateLimiter:
+    """
+    Per-user rate limiter using a sliding window.
+
+    Tracks message timestamps per user. If a user sends more than
+    `max_messages` within `window_seconds`, they're rate-limited for
+    `cooldown_seconds`.
+
+    Config in alfred.json under discord.rate_limit:
+        {
+            "messages_per_minute": 5,    # max messages in the window
+            "window_seconds": 60,        # sliding window size
+            "cooldown_seconds": 30       # cooldown after hitting limit
+        }
+    """
+
+    def __init__(
+        self,
+        max_messages: int = DEFAULT_RATE_LIMIT_MESSAGES,
+        window_seconds: int = DEFAULT_RATE_LIMIT_WINDOW,
+        cooldown_seconds: int = DEFAULT_RATE_LIMIT_COOLDOWN,
+    ):
+        self.max_messages = max_messages
+        self.window_seconds = window_seconds
+        self.cooldown_seconds = cooldown_seconds
+
+        # user_id -> list of timestamps (within the current window)
+        self._timestamps: dict[int, list[float]] = defaultdict(list)
+
+        # user_id -> cooldown expiry time (when rate-limited)
+        self._cooldowns: dict[int, float] = {}
+
+    def check(self, user_id: int) -> tuple[bool, str]:
+        """
+        Check if a user is allowed to send a message.
+
+        Returns:
+            (allowed, reason) — True if allowed, False with explanation if not
+        """
+        now = time.monotonic()
+
+        # Check if user is in cooldown
+        if user_id in self._cooldowns:
+            expiry = self._cooldowns[user_id]
+            if now < expiry:
+                remaining = int(expiry - now)
+                return False, f"Rate limited — try again in {remaining}s"
+            else:
+                # Cooldown expired, remove it
+                del self._cooldowns[user_id]
+
+        # Clean old timestamps outside the window
+        cutoff = now - self.window_seconds
+        self._timestamps[user_id] = [
+            ts for ts in self._timestamps[user_id] if ts > cutoff
+        ]
+
+        # Check if under the limit
+        if len(self._timestamps[user_id]) >= self.max_messages:
+            # Rate limit triggered — start cooldown
+            self._cooldowns[user_id] = now + self.cooldown_seconds
+            logger.warning(
+                f"Rate limited user {user_id}: "
+                f"{self.max_messages} msgs in {self.window_seconds}s, "
+                f"cooldown {self.cooldown_seconds}s"
+            )
+            return False, (
+                f"Slow down! Max {self.max_messages} messages per "
+                f"{self.window_seconds}s. Try again in {self.cooldown_seconds}s."
+            )
+
+        # Record this message
+        self._timestamps[user_id].append(now)
+        return True, ""
+
+    @classmethod
+    def from_config(cls, discord_cfg: dict) -> "RateLimiter":
+        """Create a RateLimiter from the discord config block."""
+        rl_cfg = discord_cfg.get("rate_limit", {})
+        return cls(
+            max_messages=rl_cfg.get("messages_per_minute", DEFAULT_RATE_LIMIT_MESSAGES),
+            window_seconds=rl_cfg.get("window_seconds", DEFAULT_RATE_LIMIT_WINDOW),
+            cooldown_seconds=rl_cfg.get("cooldown_seconds", DEFAULT_RATE_LIMIT_COOLDOWN),
+        )
+
+
 class DiscordBot:
     """
     Discord bot that routes channel messages to Alfred agents.
 
     One Agent instance per channel for thread safety.
     Thread messages inherit their parent channel's agent.
+    Rate-limited per user to prevent API credit abuse.
     """
 
     def __init__(self):
@@ -124,6 +218,9 @@ class DiscordBot:
         # Per-channel locks to prevent interleaved history corruption
         self._channel_locks: dict[int, asyncio.Lock] = {}
 
+        # Per-user rate limiter
+        self._rate_limiter = RateLimiter.from_config(self._discord_cfg)
+
         # Register event handlers
         self._register_events()
 
@@ -146,6 +243,13 @@ class DiscordBot:
                     logger.info(f"  #{name} -> {agent} ({mention})")
             else:
                 logger.warning(f"Guild {self._guild_id} not found!")
+
+            # Log rate limit config
+            rl = self._rate_limiter
+            logger.info(
+                f"  Rate limit: {rl.max_messages} msgs / {rl.window_seconds}s, "
+                f"{rl.cooldown_seconds}s cooldown"
+            )
 
             # Set presence
             activity = discord.Activity(
@@ -180,23 +284,33 @@ class DiscordBot:
             if not self._is_mentioned(message):
                 return
 
-        # 5. Extract clean message text (strip @mention)
+        # 5. Rate limit check (per user)
+        allowed, reason = self._rate_limiter.check(message.author.id)
+        if not allowed:
+            try:
+                await message.add_reaction("⏳")
+                await message.reply(reason, mention_author=True, delete_after=15)
+            except discord.HTTPException:
+                pass
+            return
+
+        # 6. Extract clean message text (strip @mention)
         text = self._clean_message_text(message)
         if not text.strip():
             return
 
-        # 6. Get per-channel lock
+        # 7. Get per-channel lock
         if effective_channel_id not in self._channel_locks:
             self._channel_locks[effective_channel_id] = asyncio.Lock()
 
         async with self._channel_locks[effective_channel_id]:
-            # 7. Get or create agent for this channel
+            # 8. Get or create agent for this channel
             agent = self._get_agent(effective_channel_id)
             if agent is None:
                 logger.error(f"No agent for channel {effective_channel_id}")
                 return
 
-            # 8. Process with typing indicator
+            # 9. Process with typing indicator
             try:
                 async with message.channel.typing():
                     # Run agent.run() in thread pool (it's synchronous)
@@ -205,7 +319,7 @@ class DiscordBot:
                         None, agent.run, text
                     )
 
-                # 9. Send response (chunked if needed)
+                # 10. Send response (chunked if needed)
                 await self._send_response(message.channel, response, reply_to=message)
 
             except Exception as e:
@@ -387,25 +501,16 @@ class DiscordBot:
 
         if foreground:
             # Interactive console logging
-            logging.basicConfig(
-                level=logging.INFO,
-                format="  [discord] %(message)s",
-            )
-            _quiet_noisy_loggers()
+            setup_logging(to_console=True, to_file=False)
 
             print("  Starting Alfred Discord bot...")
             print(f"  Watching {len(self._channel_configs)} channel(s)")
             print("  Press Ctrl+C to stop.\n")
         else:
             # File logging for daemon mode
-            LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
-            logging.basicConfig(
-                level=logging.INFO,
-                format="%(asctime)s [%(levelname)s] %(message)s",
-                filename=str(LOG_FILE),
-                filemode="a",
-            )
-            _quiet_noisy_loggers()
+            from .logging import LOG_FILE as _log_file
+            _log_file.parent.mkdir(parents=True, exist_ok=True)
+            setup_logging(to_console=False, to_file=True)
 
         try:
             self._client.run(token, log_handler=None)

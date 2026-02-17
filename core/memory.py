@@ -17,7 +17,10 @@ import pyarrow as pa
 
 from .config import config
 from .embeddings import get_embedding_engine
+from .logging import get_logger
 from models.base import MemoryRecord
+
+logger = get_logger("memory")
 
 
 class MemoryStore:
@@ -63,7 +66,7 @@ class MemoryStore:
         else:
             # Create table with the full batch of data
             table = self.db.create_table(table_name, data=data)
-            print(f"[alfred] Created memory table: {table_name}")
+            logger.info(f"Created memory table: {table_name}")
             self._tables[table_name] = table
             return table, True  # True = data was already inserted via create
 
@@ -233,7 +236,7 @@ class MemoryStore:
                 results.extend(table_results)
 
             except Exception as e:
-                print(f"[alfred] Warning: search failed on {table_name}: {e}")
+                logger.warning(f"Search failed on {table_name}: {e}")
 
         # Sort by distance (lower = more similar) and trim to top_k
         results.sort(key=lambda x: x.get("_distance", float("inf")))
@@ -280,7 +283,7 @@ class MemoryStore:
             table.update(where=f"id = '{record_id}'", values=clean_updates)
             return True
         except Exception as e:
-            print(f"[alfred] Update failed: {e}")
+            logger.error(f"Update failed: {e}")
             return False
 
     def delete(self, record_id: str, memory_type: str) -> bool:
@@ -291,7 +294,7 @@ class MemoryStore:
             table.delete(f"id = '{record_id}'")
             return True
         except Exception as e:
-            print(f"[alfred] Delete failed: {e}")
+            logger.error(f"Delete failed: {e}")
             return False
 
     def list_tables(self) -> list[str]:
