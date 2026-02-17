@@ -643,7 +643,7 @@ def cmd_agent_chat(name: str):
     console.print(Panel(
         f"[bold cyan]{name}[/] | {agent.llm.provider}/{agent.llm.model} | "
         f"{len(agent._get_available_tools())} tools{session_status}\n"
-        f"[dim]Type 'quit' to exit, 'reset' to clear history[/]",
+        f"[dim]'quit' to exit | 'reset' to clear | 'approve <cmd>' to allow a command[/]",
         title="Alfred Agent Chat",
         border_style="cyan",
     ))
@@ -664,6 +664,16 @@ def cmd_agent_chat(name: str):
         if user_input.lower() == "reset":
             agent.reset()
             console.print("  [dim]Session reset.[/]\n")
+            continue
+
+        # Handle command approval: "approve <command>"
+        if user_input.lower().startswith("approve "):
+            cmd_to_approve = user_input[8:].strip()
+            if cmd_to_approve:
+                result = agent.registry.execute("run_command_approve", {"command_name": cmd_to_approve})
+                console.print(f"  [dim]{result}[/]\n")
+            else:
+                console.print("  [dim]Usage: approve <command_name>[/]\n")
             continue
 
         # Run agent

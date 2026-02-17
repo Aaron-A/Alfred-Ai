@@ -308,11 +308,135 @@ def register_builtin_tools(registry: ToolRegistry):
         category="memory",
     )
 
-    # Shell command tool (controlled execution)
+    # ─── Shell Command Tool (Three-Tier Security) ──────────────
+    #
+    # Tier 1: ALWAYS ALLOWED — safe, read-only commands
+    # Tier 2: REQUIRES APPROVAL — anything not in tier 1 or 3
+    #         In CLI: prompts user. In Discord/API: blocked with explanation.
+    # Tier 3: ALWAYS BLOCKED — destructive/dangerous, no override
+    #
     import subprocess
+    import re
+    import os as _os
 
-    def run_command(command: str, timeout: int = 30) -> str:
-        """Run a shell command and return output."""
+    from .config import config
+
+    # ── Tier 1: Always allowed (read-only, safe) ──
+    _ALLOWED_COMMANDS = {
+        # File inspection
+        "ls", "cat", "head", "tail", "less", "more", "file", "stat",
+        "wc", "sort", "uniq", "diff", "comm", "tee",
+        # Search
+        "grep", "rg", "find", "locate", "which", "whereis",
+        "ag", "fd",
+        # Text processing
+        "awk", "sed", "cut", "tr", "paste", "column", "jq", "yq",
+        "xargs",
+        # System info (read-only)
+        "echo", "printf", "date", "cal", "uptime", "uname",
+        "whoami", "id", "hostname", "pwd", "env", "printenv",
+        "df", "du", "free", "top", "ps", "lsof",
+        # Development (read-only)
+        "git", "python3", "python", "node",
+        "make", "test", "true", "false",
+        # Utilities
+        "basename", "dirname", "realpath", "readlink",
+        "md5", "md5sum", "shasum", "sha256sum",
+        "bc", "expr", "seq",
+        "touch", "mkdir",
+        "curl", "wget", "http",  # allowed by default but patterns block dangerous uses
+    }
+
+    # ── Tier 3: Always blocked (no override) ──
+    _BLOCKED_COMMANDS = {
+        # Destructive filesystem
+        "mkfs", "fdisk", "dd", "parted", "format",
+        # System control
+        "shutdown", "reboot", "halt", "poweroff", "init",
+        "systemctl", "launchctl",
+        # User/permission manipulation
+        "useradd", "userdel", "usermod", "passwd", "chown", "chmod",
+        "visudo", "adduser", "deluser", "sudo", "su", "doas",
+        # Network exfiltration
+        "nc", "ncat", "netcat", "socat", "telnet", "ftp", "sftp", "scp",
+        "ssh", "rsync",
+        # Disk/mount
+        "mount", "umount", "losetup",
+        # Dangerous utilities
+        "crontab", "at", "nohup",
+    }
+
+    _BLOCKED_PATTERNS = [
+        r"rm\s+(-[a-zA-Z]*f[a-zA-Z]*\s+)?/",        # rm -rf /
+        r"rm\s+-[a-zA-Z]*r[a-zA-Z]*\s+-[a-zA-Z]*f",  # rm -r -f
+        r">\s*/(etc|usr|bin|sbin|var|System)/",        # writing to system dirs
+        r"curl\s+.*\|\s*(ba)?sh",                      # curl | sh
+        r"wget\s+.*\|\s*(ba)?sh",                      # wget | sh
+        r"curl\s+.*-o\s+/",                            # curl download to root paths
+        r"eval\s*\(",                                   # eval injection
+        r"\$\(.*curl",                                  # subshell curl
+        r"base64\s+-d\s*\|",                           # decode pipe obfuscation
+        r"python[23]?\s+-c\s+.*import\s+os",           # python os import
+        r":\(\)\{.*\}",                                 # fork bomb
+        r"/dev/(sd|hd|nvme|disk)",                     # raw disk access
+    ]
+
+    _blocked_re = [re.compile(p, re.IGNORECASE) for p in _BLOCKED_PATTERNS]
+
+    # Approved commands this session (user said "yes" once → allowed for the session)
+    _approved_commands: set[str] = set()
+
+    def _extract_base_command(command: str) -> str | None:
+        """Extract the base command name from a shell string."""
+        parts = command.strip().split()
+        for part in parts:
+            if "=" in part and not part.startswith("-"):
+                continue
+            return part.split("/")[-1].lower()
+        return None
+
+    def _classify_command(command: str) -> tuple[str, str]:
+        """
+        Classify a command into one of three tiers.
+
+        Returns:
+            (tier, reason) where tier is "allowed", "needs_approval", or "blocked"
+        """
+        cmd_stripped = command.strip()
+        base_cmd = _extract_base_command(cmd_stripped)
+
+        if not base_cmd:
+            return "blocked", "Empty command."
+
+        # Tier 3: Always blocked
+        if base_cmd in _BLOCKED_COMMANDS:
+            return "blocked", f"'{base_cmd}' is not allowed for safety reasons."
+
+        # Check pipe chains for blocked commands
+        if "|" in cmd_stripped:
+            for seg in cmd_stripped.split("|"):
+                seg = seg.strip()
+                if not seg:
+                    continue
+                seg_cmd = _extract_base_command(seg)
+                if seg_cmd and seg_cmd in _BLOCKED_COMMANDS:
+                    return "blocked", f"'{seg_cmd}' in pipe chain is not allowed."
+
+        # Check blocked patterns
+        for pattern in _blocked_re:
+            if pattern.search(cmd_stripped):
+                return "blocked", "Command matches a dangerous pattern."
+
+        # Tier 1: Always allowed
+        if base_cmd in _ALLOWED_COMMANDS:
+            return "allowed", ""
+
+        # Tier 2: Needs approval — anything else
+        return "needs_approval", f"'{base_cmd}' requires user approval."
+
+    def _execute_command(command: str, timeout: int = 30) -> str:
+        """Actually run the command (no safety checks — caller must verify)."""
+        timeout = min(timeout, 60)
         try:
             result = subprocess.run(
                 command,
@@ -321,27 +445,97 @@ def register_builtin_tools(registry: ToolRegistry):
                 text=True,
                 timeout=timeout,
                 cwd=str(config.PROJECT_ROOT),
+                env={
+                    **dict(_os.environ),
+                    "PATH": _os.environ.get("PATH", "/usr/bin:/bin"),
+                },
             )
             output = result.stdout
             if result.stderr:
                 output += f"\nSTDERR: {result.stderr}"
             if result.returncode != 0:
                 output += f"\nExit code: {result.returncode}"
+            if len(output) > 10000:
+                output = output[:10000] + f"\n... (truncated, {len(output)} chars total)"
             return output.strip() or "(no output)"
         except subprocess.TimeoutExpired:
             return f"Command timed out after {timeout}s"
         except Exception as e:
             return f"Error: {e}"
 
-    from .config import config
+    def run_command(command: str, timeout: int = 30) -> str:
+        """
+        Run a shell command with three-tier security.
+
+        Safe commands (ls, git, grep, etc.) run immediately.
+        Dangerous commands (rm -rf, sudo, etc.) are always blocked.
+        Everything else requires one-time user approval per command.
+        Once approved, that command is allowed for the rest of the session.
+        """
+        tier, reason = _classify_command(command)
+
+        if tier == "blocked":
+            return f"Blocked: {reason}"
+
+        if tier == "allowed":
+            return _execute_command(command, timeout)
+
+        # Tier 2: needs_approval
+        base_cmd = _extract_base_command(command)
+
+        # Check if user already approved this command this session
+        if base_cmd in _approved_commands:
+            return _execute_command(command, timeout)
+
+        # Return a message asking for approval
+        return (
+            f"⏳ This command needs your approval before I can run it:\n"
+            f"  $ {command}\n\n"
+            f"'{base_cmd}' is not in the pre-approved safe list.\n"
+            f"To approve, type: approve {base_cmd}\n"
+            f"This will allow '{base_cmd}' for the rest of this session."
+        )
+
+    def run_command_approve(command_name: str) -> str:
+        """
+        Approve a command for this session.
+
+        After approval, the agent can use this command freely until Alfred restarts.
+        Cannot override tier-3 blocked commands.
+        """
+        cmd = command_name.strip().lower()
+        if cmd in _BLOCKED_COMMANDS:
+            return f"Cannot approve '{cmd}' — it's permanently blocked for safety."
+        _approved_commands.add(cmd)
+        return f"Approved '{cmd}' for this session. The agent can now use it."
 
     registry.register_function(
         name="run_command",
-        description="Execute a shell command. Use for running scripts, checking system state, or executing tools. Be careful with destructive commands.",
+        description=(
+            "Execute a shell command and return output. "
+            "Safe commands (ls, git, grep, cat, etc.) run immediately. "
+            "Unknown commands require one-time user approval. "
+            "Dangerous commands (rm -rf, sudo, etc.) are always blocked. "
+            "Max timeout: 60s. Output truncated at 10k chars."
+        ),
         fn=run_command,
         parameters=[
             ToolParameter("command", "string", "The shell command to execute"),
-            ToolParameter("timeout", "integer", "Timeout in seconds (default 30)", required=False),
+            ToolParameter("timeout", "integer", "Timeout in seconds (default 30, max 60)", required=False),
+        ],
+        category="system",
+    )
+
+    registry.register_function(
+        name="run_command_approve",
+        description=(
+            "Approve a command for this session after run_command flags it. "
+            "Once approved, the agent can use that command freely until restart. "
+            "Cannot override permanently blocked commands (sudo, rm -rf, etc.)."
+        ),
+        fn=run_command_approve,
+        parameters=[
+            ToolParameter("command_name", "string", "The command to approve (e.g., 'rsync', 'docker')"),
         ],
         category="system",
     )

@@ -467,6 +467,9 @@ class Agent:
 
         return "\n".join(parts)
 
+    # Tools the LLM must never see (user-only tools)
+    _INTERNAL_TOOLS = {"run_command_approve"}
+
     def _get_available_tools(self) -> list[str]:
         """Get tool names available to this agent (respects allowlist + denylist)."""
         if self.config.tools:
@@ -479,6 +482,9 @@ class Agent:
         # Apply denylist
         if self.config.tools_denied:
             names = [n for n in names if n not in self.config.tools_denied]
+
+        # Always hide internal/user-only tools from the LLM
+        names = [n for n in names if n not in self._INTERNAL_TOOLS]
 
         return names
 
