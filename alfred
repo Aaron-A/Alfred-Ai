@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+# Alfred AI CLI wrapper
+# Usage: alfred setup | status | demo
+
+# Resolve symlinks to find the real script location
+SOURCE="${BASH_SOURCE[0]}"
+while [ -L "$SOURCE" ]; do
+    DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
+    SOURCE="$(readlink "$SOURCE")"
+    [[ $SOURCE != /* ]] && SOURCE="$DIR/$SOURCE"
+done
+SCRIPT_DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
+
+exec "$SCRIPT_DIR/venv/bin/python3" "$SCRIPT_DIR/__main__.py" "$@"

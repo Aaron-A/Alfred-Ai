@@ -1,0 +1,129 @@
+"""
+Alfred AI - Workspace Manager
+Creates and manages agent workspaces with template files.
+"""
+
+from pathlib import Path
+from .tools import ToolRegistry
+
+
+# ─── Default Templates ───────────────────────────────────────────
+
+SOUL_TEMPLATE = """# SOUL.md - Who You Are
+
+You are {name}.
+
+## Personality
+- Direct and efficient — skip the fluff
+- Opinionated when it matters
+- You remember context from past interactions (via memory search)
+- You admit when you don't know something
+
+## Rules
+- Always check your memory before answering questions about past events
+- Log important decisions and outcomes to memory
+- If you make a mistake, document it so you don't repeat it
+- When in doubt, ask
+"""
+
+AGENTS_TEMPLATE = """# AGENTS.md - {name} Workspace
+
+## Every Session
+1. Read your system prompt (loaded automatically)
+2. Check memory for recent context (automatic)
+3. Execute the task at hand
+
+## Memory
+- Memories are stored in vector search and recalled automatically
+- Use the `memory_store` tool to save important context for later
+- Use the `memory_search` tool to look up past events
+
+## Tools
+- Your available tools are listed in TOOLS.md (auto-generated)
+- Use `tool_list` to see all your tools at any time
+- Use `tool_search` before creating new tools to avoid duplicates
+- Use `tool_create` to build new tools when you need capabilities you don't have
+- Custom tools you create go in your workspace `tools/` directory
+
+## Rules
+- Don't fabricate data — if you can't find it, say so
+- Log important outcomes and lessons learned to memory
+- Be concise in responses unless detail is requested
+"""
+
+USER_TEMPLATE = """# USER.md - Who You're Helping
+
+Name: (not set)
+Role: (not set)
+
+## Preferences
+- (customize this file with user-specific context)
+"""
+
+
+def generate_tools_md(registry: ToolRegistry, tool_names: list[str] = None) -> str:
+    """
+    Generate TOOLS.md content from current registry state.
+
+    Args:
+        registry: The tool registry to read from
+        tool_names: Specific tool names to include (None = all)
+
+    Returns:
+        Formatted markdown string for TOOLS.md
+    """
+    header = (
+        "# TOOLS.md - Available Tools\n\n"
+        "> Auto-generated from tool registry. Do not edit manually.\n"
+        "> To add custom tools, create Python files in your workspace `tools/` directory.\n"
+        "> Use `tool_list` at runtime for the most current view.\n\n"
+    )
+
+    manifest = registry.to_manifest(tool_names)
+    return header + manifest + "\n"
+
+
+def create_workspace(workspace_path: str, agent_name: str, overwrite: bool = False,
+                     registry: ToolRegistry = None) -> list[str]:
+    """
+    Create an agent workspace with template files.
+
+    Args:
+        workspace_path: Path to the workspace directory
+        agent_name: Name of the agent
+        overwrite: If True, overwrite existing files
+        registry: Optional tool registry to generate TOOLS.md from
+
+    Returns:
+        List of created file paths
+    """
+    workspace = Path(workspace_path)
+    workspace.mkdir(parents=True, exist_ok=True)
+    (workspace / "memory").mkdir(exist_ok=True)
+    (workspace / "tools").mkdir(exist_ok=True)  # Workspace-local tools directory
+
+    templates = {
+        "SOUL.md": SOUL_TEMPLATE.format(name=agent_name),
+        "AGENTS.md": AGENTS_TEMPLATE.format(name=agent_name),
+        "USER.md": USER_TEMPLATE,
+    }
+
+    # Generate TOOLS.md from registry if available, otherwise use a placeholder
+    if registry:
+        templates["TOOLS.md"] = generate_tools_md(registry)
+    else:
+        templates["TOOLS.md"] = (
+            "# TOOLS.md - Available Tools\n\n"
+            "> Will be auto-generated when the agent starts.\n"
+            "> Use `tool_list` at runtime to see all available tools.\n"
+        )
+
+    created = []
+    for filename, content in templates.items():
+        filepath = workspace / filename
+        if filepath.exists() and not overwrite:
+            continue
+        filepath.write_text(content.strip() + "\n")
+        created.append(str(filepath))
+
+    return created

@@ -1,0 +1,31 @@
+# Secrets — NEVER commit
+alfred.json
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Virtual environment
+venv/
+
+# Data & storage
+data/
+*.db
+*.lance
+
+# Workspaces (contain agent memory & local state)
+workspaces/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
