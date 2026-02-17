@@ -31,6 +31,8 @@ Commands:
     discord setup      - Configure Discord bot (token, guild, channel→agent mapping)
     discord status     - Show current Discord configuration
 
+    api start          - Start the HTTP API server (default port 7700)
+
     demo               - Run the memory demo
 """
 
@@ -78,6 +80,8 @@ Commands:
     discord setup                       Configure Discord bot (token, channels, agents)
     discord status                      Show Discord configuration
 
+    api start [--port PORT]             Start the HTTP API server (default: 7700)
+
     demo                                Run the memory layer demo
 
 Examples:
@@ -90,6 +94,8 @@ Examples:
     alfred agent create trader                      # Create a trading agent
     alfred agent chat trader                        # Chat with it
     alfred discord setup                            # Configure Discord channels
+    alfred api start                                # Start REST API on port 7700
+    alfred api start --port 8080                    # Start on custom port
 """)
 
 
@@ -1272,6 +1278,37 @@ def _discord_discover(token: str, guild_id: str = None) -> dict:
     return result
 
 
+# ─── API Server Commands ─────────────────────────────────────────
+
+def cmd_api_start(host: str = "0.0.0.0", port: int = 7700):
+    """Start the Alfred API server."""
+    from rich.console import Console
+
+    console = Console()
+
+    try:
+        import uvicorn
+    except ImportError:
+        console.print("\n  [red]FastAPI/uvicorn not installed.[/]")
+        console.print("  Run: pip install fastapi uvicorn\n")
+        return
+
+    from core.config import CONFIG_FILE
+    if not CONFIG_FILE.exists():
+        console.print("\n  [yellow]Run 'alfred setup' first.[/]\n")
+        return
+
+    console.print(f"\n  [bold cyan]Alfred API Server[/]")
+    console.print(f"  Listening on: [bold]http://{host}:{port}[/]")
+    console.print(f"  Docs:         [bold]http://{host}:{port}/docs[/]")
+    console.print(f"  Press Ctrl+C to stop.\n")
+
+    from core.api import create_app
+
+    app = create_app()
+    uvicorn.run(app, host=host, port=port, log_level="info")
+
+
 def cmd_discord_setup():
     """Interactive wizard to configure the Discord bot."""
     from rich.console import Console
@@ -1811,6 +1848,30 @@ def main():
     # Handle 'logs' command
     if command == "logs":
         cmd_logs()
+        return
+
+    # Handle 'api' subcommands
+    if command == "api":
+        if len(sys.argv) < 3:
+            print("Usage: alfred api start [--port PORT] [--host HOST]")
+            return
+
+        subcmd = sys.argv[2].lower()
+
+        if subcmd == "start":
+            # Parse optional --port and --host flags
+            host = "0.0.0.0"
+            port = 7700
+            args = sys.argv[3:]
+            for i, arg in enumerate(args):
+                if arg == "--port" and i + 1 < len(args):
+                    port = int(args[i + 1])
+                elif arg == "--host" and i + 1 < len(args):
+                    host = args[i + 1]
+            cmd_api_start(host=host, port=port)
+        else:
+            print(f"Unknown api command: {subcmd}")
+            print("Available: start")
         return
 
     # Handle 'discord' subcommands
