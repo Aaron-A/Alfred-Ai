@@ -245,9 +245,19 @@ def update_schedule_result(agent_name: str, schedule_id: str, result: str):
 
 # ─── Scheduler Loop ─────────────────────────────────────────────
 
+# Max age for missed-run catchup (don't run tasks missed more than 1 hour ago)
+MAX_MISSED_RUN_MINUTES = 60
+
+
 class Scheduler:
     """
     Background scheduler that checks for due tasks every minute.
+
+    Features:
+    - Missed-run detection: catches up on tasks that were due while Alfred was offline
+    - Non-blocking execution: each task runs in its own thread
+    - Error isolation: one failing task doesn't block others
+    - Dedup: never runs the same schedule twice in the same minute
 
     Usage:
         scheduler = Scheduler()
@@ -266,14 +276,20 @@ class Scheduler:
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self._last_check_minute = -1
+        self._active_tasks: dict[str, threading.Thread] = {}  # schedule_id -> thread
 
     def start(self):
         """Start the scheduler in a background thread."""
         if self._running:
             return
         self._running = True
-        self._thread = threading.Thread(target=self._loop, daemon=True)
+
+        # Check for missed runs on startup before entering the main loop
+        self._check_missed_runs()
+
+        self._thread = threading.Thread(target=self._loop, daemon=True, name="scheduler")
         self._thread.start()
+        logger.info("Scheduler started")
 
     def stop(self):
         """Stop the scheduler."""
@@ -282,27 +298,118 @@ class Scheduler:
             self._thread.join(timeout=5)
             self._thread = None
 
+        # Wait for active tasks to finish (with timeout)
+        for sid, t in list(self._active_tasks.items()):
+            t.join(timeout=10)
+        self._active_tasks.clear()
+        logger.info("Scheduler stopped")
+
     @property
     def is_running(self) -> bool:
         return self._running
 
+    @property
+    def active_task_count(self) -> int:
+        """Number of currently executing scheduled tasks."""
+        # Clean up finished threads
+        self._active_tasks = {
+            sid: t for sid, t in self._active_tasks.items() if t.is_alive()
+        }
+        return len(self._active_tasks)
+
     def _loop(self):
         """Main scheduler loop — checks every 30 seconds."""
         while self._running:
-            now = datetime.now()
+            try:
+                now = datetime.now()
 
-            # Only check once per minute
-            current_minute = now.hour * 60 + now.minute
-            if current_minute != self._last_check_minute:
-                self._last_check_minute = current_minute
-                self._check_schedules(now)
+                # Only check once per minute
+                current_minute = now.hour * 60 + now.minute
+                if current_minute != self._last_check_minute:
+                    self._last_check_minute = current_minute
+                    self._check_schedules(now)
+            except Exception as e:
+                # Never let the scheduler loop die
+                logger.error(f"Scheduler loop error: {e}")
 
-            # Sleep 30 seconds between checks
-            time.sleep(30)
+            # Sleep in small increments so stop() is responsive
+            for _ in range(6):
+                if not self._running:
+                    break
+                time.sleep(5)
+
+    def _check_missed_runs(self):
+        """
+        On startup, check if any tasks were missed while Alfred was offline.
+
+        A run is considered "missed" if:
+        1. The cron would have matched at some point since last_run
+        2. last_run was more than 1 minute ago but less than MAX_MISSED_RUN_MINUTES ago
+        3. The schedule is enabled and the agent is active
+
+        Only runs the task once (not for every missed minute).
+        """
+        cfg = _load_config()
+        now = datetime.now()
+        caught_up = 0
+
+        for agent_name, agent_cfg in cfg.get("agents", {}).items():
+            if agent_cfg.get("status") == "paused":
+                continue
+
+            for schedule_data in agent_cfg.get("schedules", []):
+                schedule = Schedule.from_dict(schedule_data)
+                if not schedule.enabled:
+                    continue
+
+                if not schedule.last_run:
+                    continue  # Never ran — don't assume it was "missed"
+
+                try:
+                    last = datetime.fromisoformat(schedule.last_run)
+                except (ValueError, TypeError):
+                    continue
+
+                minutes_since = (now - last).total_seconds() / 60
+
+                # Skip if last run was recent (less than 2 min ago) or too old
+                if minutes_since < 2 or minutes_since > MAX_MISSED_RUN_MINUTES:
+                    continue
+
+                # Check if the cron would have matched at any minute since last_run
+                # (scan in 1-minute increments, stop at first match)
+                check_time = last.replace(second=0, microsecond=0)
+                missed = False
+                for _ in range(int(min(minutes_since, MAX_MISSED_RUN_MINUTES))):
+                    check_time = check_time.replace(
+                        minute=(check_time.minute + 1) % 60,
+                        hour=check_time.hour + (1 if check_time.minute == 59 else 0),
+                    )
+                    # Handle hour overflow
+                    if check_time.hour >= 24:
+                        break
+                    if cron_matches(schedule.cron, check_time):
+                        missed = True
+                        break
+
+                if missed:
+                    logger.info(
+                        f"Missed run detected: '{schedule.id}' for {agent_name} "
+                        f"(last ran {int(minutes_since)}m ago)"
+                    )
+                    self._execute_schedule(agent_name, schedule, is_catchup=True)
+                    caught_up += 1
+
+        if caught_up:
+            logger.info(f"Caught up on {caught_up} missed task(s)")
 
     def _check_schedules(self, now: datetime):
         """Check all agent schedules and run any that are due."""
-        cfg = _load_config()
+        try:
+            cfg = _load_config()
+        except Exception as e:
+            logger.error(f"Failed to load config: {e}")
+            return
 
         for agent_name, agent_cfg in cfg.get("agents", {}).items():
             # Skip paused agents
@@ -310,7 +417,10 @@ class Scheduler:
                 continue
 
             for schedule_data in agent_cfg.get("schedules", []):
-                schedule = Schedule.from_dict(schedule_data)
+                try:
+                    schedule = Schedule.from_dict(schedule_data)
+                except Exception:
+                    continue
 
                 if not schedule.enabled:
                     continue
@@ -327,23 +437,44 @@ class Scheduler:
                         except (ValueError, TypeError):
                             pass
 
+                    # Don't start if this schedule is already running
+                    if schedule.id in self._active_tasks:
+                        if self._active_tasks[schedule.id].is_alive():
+                            logger.warning(
+                                f"'{schedule.id}' still running from previous trigger, skipping"
+                            )
+                            continue
+
                     self._execute_schedule(agent_name, schedule)
 
-    def _execute_schedule(self, agent_name: str, schedule: Schedule):
-        """Execute a scheduled task."""
-        logger.info(f"Running '{schedule.id}' for {agent_name}: {schedule.task[:60]}")
+    def _execute_schedule(self, agent_name: str, schedule: Schedule, is_catchup: bool = False):
+        """Execute a scheduled task in a separate thread."""
+        tag = " (catchup)" if is_catchup else ""
+        logger.info(f"Running '{schedule.id}' for {agent_name}{tag}: {schedule.task[:60]}")
 
-        if self._runner:
+        if not self._runner:
+            update_schedule_result(agent_name, schedule.id, "no runner configured")
+            logger.warning("No agent runner configured, skipping execution")
+            return
+
+        def _run():
             try:
-                result = self._runner(agent_name, schedule.task)
+                self._runner(agent_name, schedule.task)
                 update_schedule_result(agent_name, schedule.id, "success")
                 logger.info(f"'{schedule.id}' completed")
             except Exception as e:
                 update_schedule_result(agent_name, schedule.id, f"error: {e}")
                 logger.error(f"'{schedule.id}' failed: {e}")
-        else:
-            update_schedule_result(agent_name, schedule.id, "no runner configured")
-            logger.warning(f"No agent runner configured, skipping execution")
+            finally:
+                # Clean up from active tasks
+                self._active_tasks.pop(schedule.id, None)
+
+        task_thread = threading.Thread(
+            target=_run, daemon=True,
+            name=f"schedule-{schedule.id}",
+        )
+        self._active_tasks[schedule.id] = task_thread
+        task_thread.start()
 
 
 # ─── Convenience ─────────────────────────────────────────────────

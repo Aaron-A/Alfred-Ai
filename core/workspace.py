@@ -53,6 +53,58 @@ AGENTS_TEMPLATE = """# AGENTS.md - {name} Workspace
 - Be concise in responses unless detail is requested
 """
 
+
+def generate_agents_md(agent_name: str) -> str:
+    """
+    Generate the agent awareness section for AGENTS.md.
+
+    Reads all agents from alfred.json and creates a "Team" section
+    so this agent knows who else exists and can use delegate_to / send_message.
+
+    The static workspace instructions (from AGENTS_TEMPLATE) are written once
+    at workspace creation. This function appends a dynamic "Other Agents" block
+    that is regenerated every time the agent starts.
+    """
+    from .config import _load_config, config as cfg_obj
+
+    cfg = _load_config()
+    agents_cfg = cfg.get("agents", {})
+
+    # If only one agent (or none), no team section needed
+    other_agents = {k: v for k, v in agents_cfg.items() if k != agent_name}
+    if not other_agents:
+        return ""
+
+    lines = [
+        "",
+        "## Other Agents",
+        "",
+        "You can delegate tasks to these agents with `delegate_to` or send them",
+        "async messages with `send_message`.",
+        "",
+    ]
+
+    for name, acfg in other_agents.items():
+        status = acfg.get("status", "active")
+        desc = acfg.get("description", "")
+        status_icon = "🟢" if status == "active" else "⏸️"
+
+        line = f"- **{name}** {status_icon}"
+        if desc:
+            line += f" — {desc}"
+        lines.append(line)
+
+        # Add any special capabilities / notes
+        if acfg.get("memory_shared"):
+            lines.append(f"  - Has shared memory access")
+        schedules = acfg.get("schedules", [])
+        active_schedules = [s for s in schedules if s.get("enabled", True)]
+        if active_schedules:
+            lines.append(f"  - {len(active_schedules)} scheduled task(s)")
+
+    lines.append("")
+    return "\n".join(lines)
+
 USER_TEMPLATE = """# USER.md - Who You're Helping
 
 Name: {user_name}

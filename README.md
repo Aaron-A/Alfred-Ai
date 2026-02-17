@@ -127,7 +127,12 @@ alfred-ai/
     trade.py          Trading model definitions
     social.py         Social model definitions
   tools/
-    web_search.py     Web search tool (Brave > xAI > DuckDuckGo)
+    web_search.py     Web search (Brave > xAI > DuckDuckGo)
+    fetch_url.py      Fetch and read web pages as text
+    http_request.py   HTTP client for API calls (GET/POST/PUT/DELETE)
+    datetime_info.py  Current date/time, timezone conversions, date math
+    calculator.py     Safe math expression evaluator
+    file_ops.py       Read/write/list files in agent workspace
 ```
 
 ### Key Concepts
@@ -141,8 +146,14 @@ alfred-ai/
 **Memory** is automatic and isolated per agent. When an agent receives a message, it searches its own vector store for relevant past context and injects it into the prompt. Hybrid search combines vector similarity (0.7 weight) with text matching (0.3 weight). Agents with `memory_shared: true` also get a `memory_search_global` tool to search across all agents.
 
 **Tools** use a layered discovery system:
-1. **Builtin** — memory read/write, always available
-2. **Shared** — in the `tools/` directory, available to all agents
+1. **Builtin** — memory read/write, shell commands, delegation, messaging
+2. **Shared** — in the `tools/` directory, available to all agents:
+   - `web_search` — search the web (Brave > xAI > DuckDuckGo)
+   - `fetch_url` — read web pages as plain text
+   - `http_request` — make API calls (GET/POST/PUT/DELETE with headers and body)
+   - `datetime_info` / `date_diff` — current time, timezone conversions, date math
+   - `calculator` — safe math evaluator (arithmetic, trig, log, etc.)
+   - `file_read` / `file_write` / `file_list` — read/write files in agent workspace
 3. **Workspace** — in an agent's `workspace/tools/` directory, private to that agent
 4. **Meta-tools** — agents can create, edit, and manage their own tools at runtime
 

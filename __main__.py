@@ -958,6 +958,7 @@ def cmd_provider_add(provider_id: str):
 
     # ── Brave Search (special case — search API, not LLM) ──
     if provider_id == "brave":
+        cfg = _load_config()
         _cmd_provider_add_brave(console, cfg)
         return
 

@@ -108,6 +108,9 @@ class Agent:
         # (workspace tools are agent-specific)
         self.registry = registry or ToolRegistry()
 
+        # Set workspace env var so shared tools (file_ops) know the workspace path
+        os.environ["ALFRED_WORKSPACE"] = str(self.workspace)
+
         # ─── Tool Loading Lifecycle ─────────────────────────────
         self._init_tools()
 
@@ -134,6 +137,7 @@ class Agent:
         4. Register meta-tools
         5. Override check_inbox with workspace-aware version
         6. Auto-generate TOOLS.md
+        7. Update AGENTS.md with awareness of other agents
         """
         # 1. Register builtins (memory_search, memory_store, run_command, delegate_to, send_message)
         #    Pass agent_id for memory isolation — each agent only sees its own memories.
@@ -164,6 +168,34 @@ class Agent:
 
         # 6. Auto-generate TOOLS.md from current registry state
         self._update_tools_manifest()
+
+        # 7. Update AGENTS.md with awareness of other agents
+        self._update_agents_awareness()
+
+    def _update_agents_awareness(self):
+        """Append/update the 'Other Agents' section in AGENTS.md."""
+        from .workspace import generate_agents_md
+
+        agents_file = self.workspace / "AGENTS.md"
+        if not agents_file.exists():
+            return
+
+        try:
+            content = agents_file.read_text()
+
+            # Strip any previous auto-generated section
+            marker = "## Other Agents"
+            if marker in content:
+                content = content[:content.index(marker)].rstrip()
+
+            # Generate fresh awareness block
+            awareness = generate_agents_md(self.config.name)
+            if awareness:
+                content = content + "\n" + awareness
+
+            agents_file.write_text(content)
+        except Exception as e:
+            logger.warning(f"Could not update AGENTS.md: {e}")
 
     def _register_inbox_tool(self):
         """Register workspace-aware messaging tools for this agent."""
@@ -438,7 +470,7 @@ class Agent:
         # Load workspace files in priority order
         workspace_files = [
             ("SOUL.md", "Your personality and values"),
-            ("AGENTS.md", "Your workspace instructions"),
+            ("AGENTS.md", "Your workspace instructions and team"),
             ("USER.md", "Who you're helping"),
             ("TOOLS.md", "Available tools and how to use them"),
         ]
