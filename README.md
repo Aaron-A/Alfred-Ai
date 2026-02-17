@@ -127,7 +127,7 @@ alfred-ai/
     trade.py          Trading model definitions
     social.py         Social model definitions
   tools/
-    web_search.py     Web search tool
+    web_search.py     Web search tool (Brave > xAI > DuckDuckGo)
 ```
 
 ### Key Concepts
@@ -233,10 +233,27 @@ curl -X POST http://localhost:7700/v1/chat \
   -d '{"agent": "alfred", "message": "What do you know about me?"}'
 ```
 
+## Web Search
+
+Agents can search the web using the `web_search` tool. Provider priority:
+
+1. **Brave Search API** — real web results, free tier (2,000 queries/month)
+2. **xAI Grok** — LLM with web search (fallback)
+3. **DuckDuckGo** — instant answer API, no key needed (limited)
+
+To enable Brave Search:
+
+```bash
+alfred provider add brave
+```
+
+Or set the `BRAVE_API_KEY` environment variable. Get a free key at [brave.com/search/api](https://brave.com/search/api/).
+
 ## Requirements
 
 - Python 3.10+
 - An API key from a supported LLM provider (Anthropic, xAI)
+- (Optional) Brave Search API key for web search
 
 ## License
 

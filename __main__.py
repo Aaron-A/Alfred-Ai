@@ -91,6 +91,7 @@ Examples:
     alfred status                                   # Check what's running
     alfred logs                                     # Watch the log
     alfred provider add anthropic                   # Add Claude as a provider
+    alfred provider add brave                       # Add Brave Search (free web search)
     alfred agent create trader                      # Create a trading agent
     alfred agent chat trader                        # Chat with it
     alfred discord setup                            # Configure Discord channels
@@ -955,6 +956,11 @@ def cmd_provider_add(provider_id: str):
         console.print("\n  [yellow]Run 'alfred setup' first.[/]\n")
         return
 
+    # ── Brave Search (special case — search API, not LLM) ──
+    if provider_id == "brave":
+        _cmd_provider_add_brave(console, cfg)
+        return
+
     PROVIDERS = {
         "anthropic": {
             "name": "Anthropic (Claude)",
@@ -1010,7 +1016,8 @@ def cmd_provider_add(provider_id: str):
 
     if provider_id not in PROVIDERS:
         console.print(f"\n  [red]Unknown provider '{provider_id}'[/]")
-        console.print(f"  Available: {', '.join(PROVIDERS.keys())}\n")
+        all_providers = list(PROVIDERS.keys()) + ["brave"]
+        console.print(f"  Available: {', '.join(all_providers)}\n")
         return
 
     prov = PROVIDERS[provider_id]
@@ -1122,6 +1129,67 @@ def cmd_provider_add(provider_id: str):
         console.print(f"  [green]\u2713 {prov['name']} set as secondary (fallback)[/]")
 
     _save_config(cfg)
+    console.print()
+
+
+def _cmd_provider_add_brave(console, cfg):
+    """Add Brave Search API key. Search-only provider, no LLM."""
+    from rich.prompt import Prompt
+    from rich.rule import Rule
+    from core.config import _save_config
+
+    console.print()
+    console.print(Rule("[bold]Add Provider: Brave Search", style="cyan"))
+    console.print()
+    console.print("  Brave Search API provides real web search results.")
+    console.print("  Free tier: 2,000 queries/month. No credit card needed.")
+    console.print("  Get a key at: [cyan]https://brave.com/search/api/[/]")
+    console.print()
+
+    # Check existing key
+    existing = cfg.get("providers", {}).get("brave", {}).get("api_key", "")
+    if existing:
+        masked = existing[:8] + "..." + existing[-4:]
+        console.print(f"  Existing key: {masked}")
+
+    key = Prompt.ask("  API key").strip()
+    if not key:
+        console.print("  [yellow]No key provided, cancelled.[/]\n")
+        return
+
+    # Test the key with a simple search
+    console.print("  [dim]Testing Brave Search...[/]", end="")
+    import urllib.request
+    import urllib.error
+    import urllib.parse
+    import json
+
+    params = urllib.parse.urlencode({"q": "test", "count": 1})
+    url = f"https://api.search.brave.com/res/v1/web/search?{params}"
+    headers = {
+        "Accept": "application/json",
+        "X-Subscription-Token": key,
+    }
+    req = urllib.request.Request(url, headers=headers)
+
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            results = data.get("web", {}).get("results", [])
+            console.print(f"\r  [green]✓ Connected — {len(results)} result(s) returned[/]")
+    except urllib.error.HTTPError as e:
+        console.print(f"\r  [red]✗ HTTP {e.code} — check your API key[/]")
+    except Exception as e:
+        console.print(f"\r  [red]✗ {e}[/]")
+
+    # Save
+    if "providers" not in cfg:
+        cfg["providers"] = {}
+    cfg["providers"]["brave"] = {"api_key": key}
+
+    _save_config(cfg)
+    console.print(f"\n  [bold green]Brave Search added![/]")
+    console.print("  Your agents can now use the web_search tool with real results.")
     console.print()
 
 
@@ -1807,13 +1875,13 @@ def main():
     # Handle 'provider' subcommands
     if command == "provider":
         if len(sys.argv) < 3:
-            print("Usage: alfred provider add <anthropic|xai|openai|ollama>")
+            print("Usage: alfred provider add <anthropic|xai|openai|ollama|brave>")
             return
 
         subcmd = sys.argv[2].lower()
         if subcmd == "add":
             if len(sys.argv) < 4:
-                print("Usage: alfred provider add <anthropic|xai|openai|ollama>")
+                print("Usage: alfred provider add <anthropic|xai|openai|ollama|brave>")
                 return
             cmd_provider_add(sys.argv[3])
         else:

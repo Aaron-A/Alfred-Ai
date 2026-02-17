@@ -113,6 +113,7 @@ class Config:
             "anthropic": "ANTHROPIC_API_KEY",
             "xai": "XAI_API_KEY",
             "openai": "OPENAI_API_KEY",
+            "brave": "BRAVE_API_KEY",
             "ollama": "",
         }
         env_var = env_map.get(provider, "")
