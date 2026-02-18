@@ -5,6 +5,7 @@ Runs entirely on-device — no API calls, no data leaves your machine.
 """
 
 import time
+import threading
 from typing import Union
 from sentence_transformers import SentenceTransformer
 from .config import config
@@ -19,6 +20,7 @@ class EmbeddingEngine:
     def __init__(self, model_name: str = None):
         self.model_name = model_name or config.EMBEDDING_MODEL
         self._model = None
+        self._lock = threading.Lock()  # SentenceTransformer.encode() is not thread-safe
 
     @property
     def model(self) -> SentenceTransformer:
@@ -47,7 +49,8 @@ class EmbeddingEngine:
         which differentiates between documents and queries.
         """
         prefixed = [f"{config.EMBEDDING_PREFIX_DOCUMENT}{t}" for t in texts]
-        embeddings = self.model.encode(prefixed, normalize_embeddings=True)
+        with self._lock:
+            embeddings = self.model.encode(prefixed, normalize_embeddings=True)
         return embeddings.tolist()
 
     def embed_query(self, query: str) -> list[float]:
@@ -57,12 +60,14 @@ class EmbeddingEngine:
         which optimizes retrieval by differentiating query vs document.
         """
         prefixed = f"{config.EMBEDDING_PREFIX_SEARCH}{query}"
-        embedding = self.model.encode([prefixed], normalize_embeddings=True)
+        with self._lock:
+            embedding = self.model.encode([prefixed], normalize_embeddings=True)
         return embedding[0].tolist()
 
     def embed_raw(self, text: str) -> list[float]:
         """Embed text without any prefix. For custom use cases."""
-        embedding = self.model.encode([text], normalize_embeddings=True)
+        with self._lock:
+            embedding = self.model.encode([text], normalize_embeddings=True)
         return embedding[0].tolist()
 
 

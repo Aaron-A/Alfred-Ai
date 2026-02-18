@@ -47,6 +47,40 @@ from .logging import metrics, setup_logging, get_logger
 
 logger = get_logger("api")
 
+# ─── Curated Provider/Model Registry ──────────────────────────
+# Shared by API endpoints, dashboard dropdowns, and agent switch_model tool.
+
+PROVIDER_MODELS = {
+    "anthropic": [
+        "claude-sonnet-4-6",
+        "claude-sonnet-4-5-20250929",
+        "claude-opus-4-0-20250918",
+        "claude-haiku-3-5-20241022",
+    ],
+    "xai": [
+        "grok-4-1-fast-reasoning",
+        "grok-4-1-fast",
+        "grok-3-fast",
+        "grok-3-mini-fast",
+    ],
+    "openai": [
+        "gpt-5.2",
+        "gpt-4.1",
+        "gpt-4.1-mini",
+        "gpt-4.1-nano",
+        "o3",
+        "o4-mini",
+    ],
+    "ollama": [
+        "llama3.1",
+        "llama3.2",
+        "mistral",
+        "codellama",
+        "deepseek-r1",
+        "qwen2.5",
+    ],
+}
+
 
 # ─── Pydantic Models ────────────────────────────────────────
 
@@ -696,39 +730,6 @@ def create_app() -> FastAPI:
             raise HTTPException(status_code=500, detail=str(e))
 
     # ─── Agent Config ─────────────────────────────────────
-
-    # Curated provider → models registry.
-    # Update these lists as new providers/models become available.
-    PROVIDER_MODELS = {
-        "anthropic": [
-            "claude-sonnet-4-6",
-            "claude-sonnet-4-5-20250929",
-            "claude-opus-4-0-20250918",
-            "claude-haiku-3-5-20241022",
-        ],
-        "xai": [
-            "grok-4-1-fast-reasoning",
-            "grok-4-1-fast",
-            "grok-3-fast",
-            "grok-3-mini-fast",
-        ],
-        "openai": [
-            "gpt-5.2",
-            "gpt-4.1",
-            "gpt-4.1-mini",
-            "gpt-4.1-nano",
-            "o3",
-            "o4-mini",
-        ],
-        "ollama": [
-            "llama3.1",
-            "llama3.2",
-            "mistral",
-            "codellama",
-            "deepseek-r1",
-            "qwen2.5",
-        ],
-    }
 
     @app.get("/v1/providers")
     async def list_providers():

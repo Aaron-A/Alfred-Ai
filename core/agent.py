@@ -26,7 +26,7 @@ from typing import Optional
 from datetime import datetime, timezone
 from dataclasses import dataclass, field
 
-from .config import config, _load_config
+from .config import config, _load_config, _save_config
 from .llm import LLMClient, LLMResponse
 from .memory import MemoryStore
 from .tools import ToolRegistry, get_tool_registry, register_builtin_tools
@@ -166,13 +166,16 @@ class Agent:
         from .tool_meta import register_meta_tools
         register_meta_tools(self.registry, self.config.name, str(self.workspace))
 
-        # 5. Override check_inbox with this agent's workspace path
+        # 5. Register switch_model tool (needs self reference for runtime LLM swap)
+        self._register_switch_model_tool()
+
+        # 6. Override check_inbox with this agent's workspace path
         self._register_inbox_tool()
 
-        # 6. Auto-generate TOOLS.md from current registry state
+        # 7. Auto-generate TOOLS.md from current registry state
         self._update_tools_manifest()
 
-        # 7. Update AGENTS.md with awareness of other agents
+        # 8. Update AGENTS.md with awareness of other agents
         self._update_agents_awareness()
 
     def _update_agents_awareness(self):
@@ -199,6 +202,54 @@ class Agent:
             agents_file.write_text(content)
         except Exception as e:
             logger.warning(f"Could not update AGENTS.md: {e}")
+
+    def _register_switch_model_tool(self):
+        """Register switch_model tool — lets the agent change its own LLM at runtime."""
+        from .tools import ToolParameter
+
+        agent = self  # capture for closure
+
+        def switch_model(provider: str, model: str) -> str:
+            """Switch this agent's LLM provider and model."""
+            from .api import PROVIDER_MODELS
+
+            if provider not in PROVIDER_MODELS:
+                return f"Unknown provider '{provider}'. Known providers: {list(PROVIDER_MODELS.keys())}"
+            if model not in PROVIDER_MODELS[provider]:
+                return (
+                    f"Unknown model '{model}' for {provider}. "
+                    f"Available: {PROVIDER_MODELS[provider]}"
+                )
+
+            old_provider = agent.llm.provider
+            old_model = agent.llm.model
+            agent.switch_llm(provider, model)
+            return (
+                f"Switched from {old_provider}/{old_model} to {provider}/{model}. "
+                f"Config saved. The new model takes effect on your next message."
+            )
+
+        self.registry.register_function(
+            name="switch_model",
+            description=(
+                "Switch this agent's LLM provider and model. Use when the user asks "
+                "to change models, switch providers, or use a different AI. "
+                "The change takes effect immediately and persists across restarts."
+            ),
+            fn=switch_model,
+            parameters=[
+                ToolParameter(
+                    "provider", "string",
+                    "LLM provider to switch to",
+                    enum=["anthropic", "xai", "openai", "ollama"],
+                ),
+                ToolParameter(
+                    "model", "string",
+                    "Model name for the chosen provider (e.g., 'claude-sonnet-4-6', 'grok-3-fast')",
+                ),
+            ],
+            category="system",
+        )
 
     def _register_inbox_tool(self):
         """Register workspace-aware messaging tools for this agent."""
@@ -688,6 +739,9 @@ class Agent:
         """
         start_time = time.monotonic()
 
+        # Apply any pending LLM switch from a prior turn's switch_model tool call
+        self._apply_pending_llm_switch()
+
         try:
             # Step 1: Auto-search memory for relevant context (scoped to this agent)
             memory_context = ""
@@ -998,6 +1052,46 @@ class Agent:
         }
         # Remove saved session file
         self._session_file.unlink(missing_ok=True)
+
+    def switch_llm(self, provider: str, model: str):
+        """Switch LLM provider/model and persist to alfred.json.
+
+        The config change is saved immediately and takes effect on the **next**
+        run() call.  We defer the in-memory client swap because this tool
+        may be called mid-loop — changing self.llm while the current loop
+        is talking to the old provider would corrupt the conversation.
+        """
+        # 1. Stage the pending swap (applied in _apply_pending_llm_switch)
+        self._pending_llm_switch = (provider, model)
+
+        # 2. Update agent config (in-memory) — informational only
+        self.config.provider = provider
+        self.config.model = model
+
+        # 3. Persist to alfred.json so it survives restarts
+        cfg = _load_config()
+        cfg.setdefault("agents", {}).setdefault(self.config.name, {}).update({
+            "provider": provider,
+            "model": model,
+        })
+        _save_config(cfg)
+
+        logger.info(f"{self.config.name}: queued LLM switch to {provider}/{model}")
+
+    def _apply_pending_llm_switch(self):
+        """Apply any pending LLM switch. Called at the start of run()."""
+        pending = getattr(self, "_pending_llm_switch", None)
+        if pending is None:
+            return
+        provider, model = pending
+        self._pending_llm_switch = None
+
+        self.llm.provider = provider
+        self.llm.model = model
+        self.llm.api_key = config.get_api_key(provider)
+        self.llm.base_url = LLMClient.PROVIDER_URLS.get(provider, "")
+        self.llm._anthropic_client = None  # force re-init
+        logger.info(f"{self.config.name}: LLM switch applied — now {provider}/{model}")
 
     @property
     def session_info(self) -> dict:
