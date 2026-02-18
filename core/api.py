@@ -470,12 +470,13 @@ def create_app() -> FastAPI:
         if not workspace.is_absolute():
             workspace = config.PROJECT_ROOT / workspace
 
-        # Also evict from pool if loaded
-        await pool.reset(agent_name, session_id)
-
+        # Delete the file first (before pool.reset which also unlinks)
         deleted = Agent.delete_session(str(workspace), session_id)
         if not deleted:
             raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found.")
+
+        # Evict from pool so stale in-memory agent is cleared
+        await pool.reset(agent_name, session_id)
 
         return {"message": f"Session '{session_id}' deleted for {agent_name}."}
 
