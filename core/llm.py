@@ -8,10 +8,25 @@ import json
 import urllib.request
 import urllib.error
 from typing import Optional
+from dataclasses import dataclass, field
 from .config import config
 from .logging import get_logger
 
 logger = get_logger("llm")
+
+
+@dataclass
+class LLMResponse:
+    """Response from an LLM call, including token usage."""
+    text: str
+    input_tokens: int = 0
+    output_tokens: int = 0
+    model: str = ""
+    provider: str = ""
+
+    @property
+    def total_tokens(self) -> int:
+        return self.input_tokens + self.output_tokens
 
 
 class LLMClient:
@@ -86,6 +101,23 @@ class LLMClient:
         Returns:
             The assistant's response text
         """
+        llm_response = self.ask_full(prompt, system, context, max_tokens, temperature)
+        return llm_response.text
+
+    def ask_full(
+        self,
+        prompt: str,
+        system: str = None,
+        context: list[dict] = None,
+        max_tokens: int = 4096,
+        temperature: float = 0.7,
+    ) -> LLMResponse:
+        """
+        Send a prompt and get a full response with token usage.
+
+        Returns:
+            LLMResponse with text, token counts, model, and provider info
+        """
         messages = []
         if context:
             messages.extend(context)
@@ -116,7 +148,7 @@ class LLMClient:
 
     def _call_provider(
         self, provider: str, model: str, messages, system, max_tokens, temperature,
-    ) -> str:
+    ) -> LLMResponse:
         """Route a call to the correct provider backend."""
         if provider == "anthropic":
             return self._ask_anthropic(messages, system, max_tokens, temperature, model=model)
@@ -128,10 +160,11 @@ class LLMClient:
         else:
             raise ValueError(f"Unknown provider: {provider}")
 
-    def _ask_anthropic(self, messages, system, max_tokens, temperature, model=None) -> str:
+    def _ask_anthropic(self, messages, system, max_tokens, temperature, model=None) -> LLMResponse:
         """Call Anthropic's native Messages API."""
+        model_name = model or self.model
         kwargs = {
-            "model": model or self.model,
+            "model": model_name,
             "max_tokens": max_tokens,
             "messages": messages,
             "temperature": temperature,
@@ -140,12 +173,24 @@ class LLMClient:
             kwargs["system"] = system
 
         response = self.anthropic_client.messages.create(**kwargs)
-        return response.content[0].text
+
+        # Extract token usage from response
+        usage = getattr(response, "usage", None)
+        input_tokens = getattr(usage, "input_tokens", 0) if usage else 0
+        output_tokens = getattr(usage, "output_tokens", 0) if usage else 0
+
+        return LLMResponse(
+            text=response.content[0].text,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            model=model_name,
+            provider="anthropic",
+        )
 
     def _ask_openai_compatible(
         self, messages, system, max_tokens, temperature,
         provider=None, model=None,
-    ) -> str:
+    ) -> LLMResponse:
         """Call OpenAI-compatible /v1/chat/completions (works for xAI, OpenAI, Ollama)."""
         provider = provider or self.provider
         model = model or self.model
@@ -181,7 +226,19 @@ class LLMClient:
         try:
             with urllib.request.urlopen(req, timeout=120) as resp:
                 result = json.loads(resp.read().decode("utf-8"))
-                return result["choices"][0]["message"]["content"]
+
+                # Extract token usage (OpenAI-compatible format)
+                usage = result.get("usage", {})
+                input_tokens = usage.get("prompt_tokens", 0)
+                output_tokens = usage.get("completion_tokens", 0)
+
+                return LLMResponse(
+                    text=result["choices"][0]["message"]["content"],
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    model=model,
+                    provider=provider,
+                )
         except urllib.error.HTTPError as e:
             body = e.read().decode("utf-8", errors="replace")
             raise RuntimeError(f"LLM API error ({e.code}): {body}") from e
@@ -262,6 +319,125 @@ class LLMClient:
             lines.append("")
 
         return "\n".join(lines)
+
+    # ─── Streaming ─────────────────────────────────────────────
+
+    def stream(
+        self,
+        prompt: str,
+        system: str = None,
+        context: list[dict] = None,
+        max_tokens: int = 4096,
+        temperature: float = 0.7,
+    ):
+        """
+        Stream a response token by token. Yields text chunks as they arrive.
+
+        Args:
+            prompt: The user message
+            system: Optional system prompt
+            context: Optional prior messages
+            max_tokens: Max response tokens
+            temperature: Sampling temperature
+
+        Yields:
+            str: Text chunks as they're generated
+        """
+        messages = []
+        if context:
+            messages.extend(context)
+        messages.append({"role": "user", "content": prompt})
+
+        if self.provider == "anthropic":
+            yield from self._stream_anthropic(messages, system, max_tokens, temperature)
+        elif self.provider in self.OPENAI_COMPATIBLE:
+            yield from self._stream_openai_compatible(
+                messages, system, max_tokens, temperature,
+                provider=self.provider, model=self.model,
+            )
+        else:
+            # Fallback: non-streaming
+            resp = self.ask(prompt, system, context, max_tokens, temperature)
+            yield resp
+
+    def _stream_anthropic(self, messages, system, max_tokens, temperature):
+        """Stream from Anthropic's Messages API."""
+        kwargs = {
+            "model": self.model,
+            "max_tokens": max_tokens,
+            "messages": messages,
+            "temperature": temperature,
+        }
+        if system:
+            kwargs["system"] = system
+
+        with self.anthropic_client.messages.stream(**kwargs) as stream:
+            for text in stream.text_stream:
+                yield text
+
+    def _stream_openai_compatible(
+        self, messages, system, max_tokens, temperature,
+        provider=None, model=None,
+    ):
+        """Stream from OpenAI-compatible /v1/chat/completions using SSE."""
+        provider = provider or self.provider
+        model = model or self.model
+        base_url = self.PROVIDER_URLS.get(provider, self.base_url)
+        url = f"{base_url}/v1/chat/completions"
+
+        all_messages = []
+        if system:
+            all_messages.append({"role": "system", "content": system})
+        all_messages.extend(messages)
+
+        payload = {
+            "model": model,
+            "messages": all_messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "stream": True,
+        }
+
+        headers = {
+            "Content-Type": "application/json",
+            "User-Agent": "Alfred-AI/1.0",
+        }
+
+        api_key = config.get_api_key(provider) if provider != self.provider else self.api_key
+        if api_key and provider != "ollama":
+            headers["Authorization"] = f"Bearer {api_key}"
+
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+
+        try:
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                # Parse SSE stream line by line
+                for line in resp:
+                    line = line.decode("utf-8").strip()
+                    if not line or not line.startswith("data: "):
+                        continue
+                    data_str = line[6:]  # Strip "data: " prefix
+                    if data_str == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(data_str)
+                        delta = chunk.get("choices", [{}])[0].get("delta", {})
+                        content = delta.get("content", "")
+                        if content:
+                            yield content
+                    except (json.JSONDecodeError, IndexError, KeyError):
+                        continue
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"LLM API error ({e.code}): {body}") from e
+        except urllib.error.URLError as e:
+            if provider == "ollama":
+                raise RuntimeError(
+                    "Ollama not reachable at localhost:11434. "
+                    "Is Ollama running? Start it with: ollama serve"
+                ) from e
+            raise RuntimeError(f"LLM connection error: {e.reason}") from e
 
     def test_connection(self) -> tuple[bool, str]:
         """

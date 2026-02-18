@@ -65,7 +65,7 @@ Commands:
     agent create <name>                 Create a new agent with workspace
     agent list                          List all configured agents
     agent info <name>                   Show detailed agent info
-    agent chat <name>                   Interactive chat with an agent
+    agent chat <name> [--session NAME]   Interactive chat with an agent
     agent pause <name>                  Pause an agent (disables schedules)
     agent resume <name>                 Resume a paused agent
     agent delete <name>                 Delete an agent and its config
@@ -73,6 +73,16 @@ Commands:
     agent schedule add <name>           Add a scheduled task to an agent
     agent schedule list [name]          List scheduled tasks (all or one agent)
     agent schedule remove <name> <id>   Remove a scheduled task
+    agent schedule enable <name> <id>   Resume a paused schedule
+    agent schedule disable <name> <id>  Pause a schedule without removing it
+    agent schedule run <name> <id>      Manually trigger a schedule right now
+    agent schedule history <name> <id>  Show run history with stats
+    agent schedule retry <name> <id>    Configure retry settings
+
+    session list [agent]                List all saved conversation sessions
+    session view <agent> <id>           View conversation history
+    session export <agent> <id>         Export a session to markdown
+    session delete <agent> <id>         Delete a saved session
 
     tools list [agent_name]             List all registered tools
                                         (omit name for global view, add name for agent-specific)
@@ -80,7 +90,7 @@ Commands:
     discord setup                       Configure Discord bot (token, channels, agents)
     discord status                      Show Discord configuration
 
-    api start [--port PORT]             Start the HTTP API server (default: 7700)
+    api start [--port PORT]             Start API + web dashboard (default: 7700)
 
     demo                                Run the memory layer demo
 
@@ -94,6 +104,9 @@ Examples:
     alfred provider add brave                       # Add Brave Search (free web search)
     alfred agent create trader                      # Create a trading agent
     alfred agent chat trader                        # Chat with it
+    alfred agent chat trader --session research     # Named session
+    alfred session list                             # See all saved sessions
+    alfred session view alfred cli                  # View CLI conversation history
     alfred discord setup                            # Configure Discord channels
     alfred api start                                # Start REST API on port 7700
     alfred api start --port 8080                    # Start on custom port
@@ -186,7 +199,7 @@ def cmd_status():
     # Discord
     discord_cfg = cfg.get("discord", {})
     if discord_cfg.get("bot_token"):
-        from core.discord import is_bot_running
+        from core.discord import is_bot_running, is_bot_healthy
         pid = is_bot_running()
         channels = discord_cfg.get("channels", {})
         channel_list = ", ".join(
@@ -194,7 +207,11 @@ def cmd_status():
             for c in channels.values()
         )
         if pid:
-            status_str = f"[bold green]running[/] (PID {pid})"
+            healthy, health_msg = is_bot_healthy()
+            if healthy:
+                status_str = f"[bold green]{health_msg}[/]"
+            else:
+                status_str = f"[bold red]{health_msg}[/]"
         elif channels:
             status_str = f"[dim]stopped[/] — {channel_list}"
         else:
@@ -466,35 +483,42 @@ def cmd_agent_info(name: str):
     # Schedules
     schedules = acfg.get("schedules", [])
     if schedules:
+        from core.scheduler import Schedule as _Schedule, next_run as _next_run
         console.print()
         sched_table = Table(box=box.ROUNDED, title="Schedules", title_style="bold")
         sched_table.add_column("ID", style="cyan", width=10)
-        sched_table.add_column("Cron")
         sched_table.add_column("Schedule")
         sched_table.add_column("Task")
         sched_table.add_column("Status")
+        sched_table.add_column("Runs", justify="right")
         sched_table.add_column("Last Run")
 
         for s in schedules:
-            sid = s.get("id", "?")
-            cron = s.get("cron", "?")
-            enabled = s.get("enabled", True)
-            task = s.get("task", "?")
+            sched = _Schedule.from_dict(s)
+            task = sched.task
             if len(task) > 40:
                 task = task[:37] + "..."
-            last_run = s.get("last_run", "")
-            last_result = s.get("last_result", "")
 
-            status = "[green]active[/]" if enabled else "[yellow]paused[/]"
-            if last_run:
-                # Show just date+time, not full ISO
-                run_display = last_run[:16].replace("T", " ")
-                if last_result and "error" in last_result:
-                    run_display += f" [red]({last_result[:20]})[/]"
+            status = "[green]active[/]" if sched.enabled else "[yellow]paused[/]"
+            if sched.max_retries > 0:
+                status += f" [dim]+{sched.max_retries}r[/]"
+
+            # Run stats
+            if sched.run_count > 0:
+                rate = sched.success_rate
+                rate_color = "green" if rate >= 90 else "yellow" if rate >= 50 else "red"
+                runs_display = f"{sched.run_count} [{rate_color}]({rate:.0f}%)[/]"
+            else:
+                runs_display = "[dim]0[/]"
+
+            if sched.last_run:
+                run_display = sched.last_run[:16].replace("T", " ")
+                if sched.last_result and "error" in sched.last_result:
+                    run_display += f" [red]\u2717[/]"
             else:
                 run_display = "[dim]never[/]"
 
-            sched_table.add_row(sid, f"[dim]{cron}[/]", describe_cron(cron), task, status, run_display)
+            sched_table.add_row(sched.id, describe_cron(sched.cron), task, status, runs_display, run_display)
 
         console.print(sched_table)
 
@@ -604,11 +628,11 @@ def cmd_agent_delete(name: str):
     console.print()
 
 
-def cmd_agent_chat(name: str):
+def cmd_agent_chat(name: str, session_id: str = None):
     from rich.console import Console
     from rich.panel import Panel
     from core.config import CONFIG_FILE, _load_config
-    from core.agent import AgentManager
+    from core.agent import AgentManager, Agent
 
     console = Console()
 
@@ -632,18 +656,28 @@ def cmd_agent_chat(name: str):
         console.print(f"  [bold]alfred agent resume {name}[/]\n")
         return
 
-    # Load agent
+    # Load agent with optional named session
     manager = AgentManager()
-    agent = manager.get(name)
+    agent_config = manager._configs[name]
+
+    # Ensure workspace exists
+    from pathlib import Path
+    workspace = Path(agent_config.workspace)
+    workspace.mkdir(parents=True, exist_ok=True)
+    (workspace / "memory").mkdir(exist_ok=True)
+    (workspace / "tools").mkdir(exist_ok=True)
+
+    agent = Agent(agent_config, session_id=session_id)
 
     console.print()
     session = agent.session_info
+    session_label = f"session: {session_id}" if session_id else "default session"
     session_status = ""
     if session["turns"] > 0:
         session_status = f" | [green]{session['turns']} turns restored[/]"
     console.print(Panel(
         f"[bold cyan]{name}[/] | {agent.llm.provider}/{agent.llm.model} | "
-        f"{len(agent._get_available_tools())} tools{session_status}\n"
+        f"{len(agent._get_available_tools())} tools | {session_label}{session_status}\n"
         f"[dim]'quit' to exit | 'reset' to clear | 'approve <cmd>' to allow a command[/]",
         title="Alfred Agent Chat",
         border_style="cyan",
@@ -691,10 +725,10 @@ def cmd_agent_chat(name: str):
 
 def cmd_agent_schedule_add(name: str):
     from rich.console import Console
-    from rich.prompt import Prompt
+    from rich.prompt import Prompt, IntPrompt, Confirm
     from rich.rule import Rule
     from core.config import CONFIG_FILE, _load_config
-    from core.scheduler import add_schedule, describe_cron, cron_matches
+    from core.scheduler import add_schedule, describe_cron, cron_matches, next_run
 
     console = Console()
     cfg = _load_config()
@@ -720,16 +754,37 @@ def cmd_agent_schedule_add(name: str):
     human = describe_cron(cron)
     console.print(f"  [dim]Parsed: {human}[/]")
 
+    # Show next fire time
+    nxt = next_run(cron)
+    if nxt:
+        console.print(f"  [dim]Next run: {nxt.strftime('%Y-%m-%d %H:%M')}[/]")
+
     # Task description
     console.print()
     task = Prompt.ask("  Task (what should the agent do?)")
 
+    # Retry settings (optional)
+    retries = 0
+    retry_delay = 30
+    if Confirm.ask("\n  Enable retries on failure?", default=False):
+        retries = IntPrompt.ask("  Max retries (1-3)", default=1)
+        retries = max(0, min(retries, 3))
+        retry_delay = IntPrompt.ask("  Retry delay (seconds)", default=30)
+        retry_delay = max(5, retry_delay)
+
     schedule = add_schedule(name, cron, task)
+
+    # Update retry settings if configured
+    if retries > 0:
+        from core.scheduler import update_schedule_retries
+        update_schedule_retries(name, schedule.id, retries, retry_delay)
 
     console.print(f"\n  [green]Schedule added![/]")
     console.print(f"  ID: [cyan]{schedule.id}[/]")
     console.print(f"  When: {human}")
     console.print(f"  Task: {task}")
+    if retries > 0:
+        console.print(f"  Retries: {retries} (delay: {retry_delay}s)")
     console.print()
 
 
@@ -738,7 +793,7 @@ def cmd_agent_schedule_list(name: str = None):
     from rich.table import Table
     from rich import box
     from core.config import CONFIG_FILE, _load_config
-    from core.scheduler import describe_cron
+    from core.scheduler import describe_cron, next_run, Schedule
 
     console = Console()
     cfg = _load_config()
@@ -774,27 +829,57 @@ def cmd_agent_schedule_list(name: str = None):
         table = Table(box=box.ROUNDED, title=title, title_style="bold cyan")
         table.add_column("ID", style="cyan", width=10)
         table.add_column("Schedule")
-        table.add_column("Cron", style="dim")
         table.add_column("Task")
         table.add_column("Status")
+        table.add_column("Runs", justify="right")
         table.add_column("Last Run")
+        table.add_column("Next Run")
 
         for s in schedules:
-            sid = s.get("id", "?")
-            cron = s.get("cron", "?")
-            enabled = s.get("enabled", True)
-            task = s.get("task", "?")
-            if len(task) > 45:
-                task = task[:42] + "..."
-            last_run = s.get("last_run", "")
+            sched = Schedule.from_dict(s)
+            task = sched.task
+            if len(task) > 40:
+                task = task[:37] + "..."
 
-            status = "[green]active[/]" if enabled else "[yellow]paused[/]"
+            status = "[green]active[/]" if sched.enabled else "[yellow]paused[/]"
             if agent_status == "paused":
                 status = "[yellow]agent paused[/]"
 
-            run_display = last_run[:16].replace("T", " ") if last_run else "[dim]never[/]"
+            # Run stats
+            if sched.run_count > 0:
+                rate = sched.success_rate
+                rate_color = "green" if rate >= 90 else "yellow" if rate >= 50 else "red"
+                runs_display = f"{sched.run_count} [{rate_color}]({rate:.0f}%)[/]"
+            else:
+                runs_display = "[dim]0[/]"
 
-            table.add_row(sid, describe_cron(cron), cron, task, status, run_display)
+            # Retry badge
+            if sched.max_retries > 0:
+                status += f" [dim]+{sched.max_retries}r[/]"
+
+            # Consecutive failure warning
+            if sched.consecutive_failures >= 3:
+                status += f" [red]({sched.consecutive_failures} fails)[/]"
+
+            run_display = sched.last_run[:16].replace("T", " ") if sched.last_run else "[dim]never[/]"
+
+            # Next run
+            nxt = next_run(sched.cron) if sched.enabled else None
+            if nxt:
+                from datetime import datetime as _dt
+                delta = nxt - _dt.now()
+                total_mins = int(delta.total_seconds() / 60)
+                if total_mins < 60:
+                    next_display = f"{total_mins}m"
+                elif total_mins < 1440:
+                    next_display = f"{total_mins // 60}h {total_mins % 60}m"
+                else:
+                    next_display = f"{total_mins // 1440}d {(total_mins % 1440) // 60}h"
+                next_display = f"[green]{next_display}[/]"
+            else:
+                next_display = "[dim]—[/]"
+
+            table.add_row(sched.id, describe_cron(sched.cron), task, status, runs_display, run_display, next_display)
 
         console.print(table)
         console.print()
@@ -838,6 +923,178 @@ def cmd_agent_schedule_remove(name: str, schedule_id: str):
         console.print(f"\n  [green]Schedule removed.[/]\n")
     else:
         console.print(f"\n  [red]Failed to remove schedule.[/]\n")
+
+
+def cmd_agent_schedule_enable(name: str, schedule_id: str):
+    """Enable a paused schedule."""
+    from rich.console import Console
+    from core.config import _load_config
+    from core.scheduler import toggle_schedule
+
+    console = Console()
+    if toggle_schedule(name, schedule_id, enabled=True):
+        console.print(f"\n  [green]\u2713[/] Schedule [cyan]{schedule_id}[/] enabled.\n")
+    else:
+        console.print(f"\n  [red]Schedule '{schedule_id}' not found for agent '{name}'.[/]\n")
+
+
+def cmd_agent_schedule_disable(name: str, schedule_id: str):
+    """Disable a schedule (pauses it without removing)."""
+    from rich.console import Console
+    from core.scheduler import toggle_schedule
+
+    console = Console()
+    if toggle_schedule(name, schedule_id, enabled=False):
+        console.print(f"\n  [yellow]\u2713[/] Schedule [cyan]{schedule_id}[/] disabled.\n")
+    else:
+        console.print(f"\n  [red]Schedule '{schedule_id}' not found for agent '{name}'.[/]\n")
+
+
+def cmd_agent_schedule_run(name: str, schedule_id: str):
+    """Manually trigger a scheduled task right now."""
+    from rich.console import Console
+    from core.config import CONFIG_FILE, _load_config
+    from core.scheduler import get_schedule, run_schedule_now
+    from core.agent import Agent, AgentConfig
+    from pathlib import Path
+    from core.config import config as _config
+
+    console = Console()
+
+    schedule = get_schedule(name, schedule_id)
+    if not schedule:
+        console.print(f"\n  [red]Schedule '{schedule_id}' not found for agent '{name}'.[/]\n")
+        return
+
+    console.print(f"\n  Running [cyan]{schedule_id}[/]: {schedule.task[:60]}")
+    console.print(f"  [dim]This runs synchronously — wait for it to complete...[/]\n")
+
+    def _runner(agent_name: str, task: str) -> str:
+        cfg = _load_config()
+        agent_data = dict(cfg.get("agents", {}).get(agent_name, {}))
+        agent_data["name"] = agent_name
+
+        workspace = Path(agent_data.get("workspace", f"workspaces/{agent_name}"))
+        if not workspace.is_absolute():
+            workspace = _config.PROJECT_ROOT / workspace
+        agent_data["workspace"] = str(workspace)
+        workspace.mkdir(parents=True, exist_ok=True)
+        (workspace / "memory").mkdir(exist_ok=True)
+        (workspace / "tools").mkdir(exist_ok=True)
+
+        agent_config = AgentConfig.from_dict(agent_data)
+        agent = Agent(agent_config, session_id="schedule")
+        return agent.run(task)
+
+    try:
+        result = run_schedule_now(name, schedule_id, agent_runner=_runner)
+        console.print(f"  [green]\u2713[/] Completed!")
+        console.print(f"\n  [bold cyan]{name}>[/] {result}\n")
+    except Exception as e:
+        console.print(f"  [red]\u2717 Failed: {e}[/]\n")
+
+
+def cmd_agent_schedule_history(name: str, schedule_id: str):
+    """Show run history for a schedule."""
+    from rich.console import Console
+    from rich.table import Table
+    from rich import box
+    from core.scheduler import get_schedule, get_schedule_history
+
+    console = Console()
+
+    schedule = get_schedule(name, schedule_id)
+    if not schedule:
+        console.print(f"\n  [red]Schedule '{schedule_id}' not found for agent '{name}'.[/]\n")
+        return
+
+    console.print()
+    console.print(f"  [bold cyan]{schedule_id}[/] — {schedule.task[:60]}")
+    console.print(f"  Cron: [dim]{schedule.cron}[/]")
+
+    # Stats summary
+    if schedule.run_count > 0:
+        rate = schedule.success_rate
+        rate_color = "green" if rate >= 90 else "yellow" if rate >= 50 else "red"
+        console.print(
+            f"  Runs: {schedule.run_count} | "
+            f"[green]{schedule.success_count}[/] success, "
+            f"[red]{schedule.fail_count}[/] failed | "
+            f"Rate: [{rate_color}]{rate:.0f}%[/]"
+        )
+        if schedule.consecutive_failures > 0:
+            console.print(f"  [red]Consecutive failures: {schedule.consecutive_failures}[/]")
+    else:
+        console.print("  [dim]No runs yet.[/]")
+
+    history = get_schedule_history(name, schedule_id)
+    if not history:
+        console.print("\n  [dim]No run history.[/]\n")
+        return
+
+    console.print()
+    table = Table(box=box.ROUNDED, title="Run History", title_style="bold")
+    table.add_column("Time", style="dim")
+    table.add_column("Result")
+    table.add_column("Duration", justify="right")
+    table.add_column("Flags", style="dim")
+
+    for run in history:
+        ts = run.timestamp[:19].replace("T", " ") if run.timestamp else "?"
+
+        if run.result == "success":
+            result_display = "[green]success[/]"
+        elif "will retry" in run.result:
+            result_display = f"[yellow]{run.result[:40]}[/]"
+        else:
+            result_display = f"[red]{run.result[:40]}[/]"
+
+        duration = f"{run.elapsed_ms}ms" if run.elapsed_ms else "[dim]—[/]"
+
+        flags = []
+        if run.is_catchup:
+            flags.append("catchup")
+        if run.is_retry:
+            flags.append("retry")
+        flags_display = ", ".join(flags) if flags else ""
+
+        table.add_row(ts, result_display, duration, flags_display)
+
+    console.print(table)
+    console.print()
+
+
+def cmd_agent_schedule_retry(name: str, schedule_id: str, max_retries: int = None, delay: int = None):
+    """Configure retry settings for a schedule."""
+    from rich.console import Console
+    from rich.prompt import IntPrompt
+    from core.scheduler import get_schedule, update_schedule_retries
+
+    console = Console()
+
+    schedule = get_schedule(name, schedule_id)
+    if not schedule:
+        console.print(f"\n  [red]Schedule '{schedule_id}' not found for agent '{name}'.[/]\n")
+        return
+
+    console.print(f"\n  [bold cyan]{schedule_id}[/] — {schedule.task[:60]}")
+    console.print(f"  Current: max_retries={schedule.max_retries}, delay={schedule.retry_delay_seconds}s")
+
+    if max_retries is None:
+        max_retries = IntPrompt.ask("\n  Max retries (0-3, 0=disabled)", default=schedule.max_retries)
+    if delay is None:
+        delay = IntPrompt.ask("  Retry delay (seconds)", default=schedule.retry_delay_seconds)
+
+    max_retries = max(0, min(max_retries, 3))
+    delay = max(5, delay)
+
+    if update_schedule_retries(name, schedule_id, max_retries, delay):
+        if max_retries > 0:
+            console.print(f"\n  [green]\u2713[/] Retries set: {max_retries} attempts, {delay}s delay.\n")
+        else:
+            console.print(f"\n  [green]\u2713[/] Retries disabled.\n")
+    else:
+        console.print(f"\n  [red]Failed to update.[/]\n")
 
 
 # ─── Models Commands ─────────────────────────────────────────────
@@ -1197,6 +1454,241 @@ def _cmd_provider_add_brave(console, cfg):
 def cmd_demo():
     import demo
     demo.main()
+
+
+# ─── Session Commands ────────────────────────────────────────────
+
+def cmd_session_list(agent_name: str = None):
+    """List all saved conversation sessions."""
+    from rich.console import Console
+    from rich.table import Table
+    from rich import box
+    from core.config import CONFIG_FILE, _load_config
+    from core.agent import Agent
+    from pathlib import Path
+    from core.config import config as cfg_module
+
+    console = Console()
+
+    if not CONFIG_FILE.exists():
+        console.print("\n  [yellow]Run 'alfred setup' first.[/]\n")
+        return
+
+    cfg = _load_config()
+    agents = cfg.get("agents", {})
+
+    if not agents:
+        console.print("\n  [dim]No agents configured.[/]\n")
+        return
+
+    # If a specific agent is given, only show that one
+    agent_names = [agent_name] if agent_name else list(agents.keys())
+
+    found_any = False
+    for name in agent_names:
+        if name not in agents:
+            console.print(f"\n  [red]Agent '{name}' not found.[/]")
+            continue
+
+        workspace = agents[name].get("workspace", f"workspaces/{name}")
+        workspace_path = Path(workspace)
+        if not workspace_path.is_absolute():
+            workspace_path = cfg_module.PROJECT_ROOT / workspace_path
+
+        sessions = Agent.list_sessions(str(workspace_path))
+
+        if not sessions:
+            if agent_name:  # Only show "no sessions" if user asked for a specific agent
+                console.print(f"\n  [dim]No saved sessions for '{name}'.[/]\n")
+            continue
+
+        found_any = True
+        console.print()
+        table = Table(
+            box=box.ROUNDED,
+            title=f"Sessions — {name}",
+            title_style="bold cyan",
+        )
+        table.add_column("Session ID", style="bold")
+        table.add_column("Turns", justify="right")
+        table.add_column("Started", style="dim")
+        table.add_column("Last Active", style="dim")
+
+        for s in sessions:
+            # Format timestamps to be human-readable
+            started = s.get("started_at", "")[:19].replace("T", " ") if s.get("started_at") else "?"
+            last = s.get("last_activity", "")[:19].replace("T", " ") if s.get("last_activity") else "?"
+            turns = str(s.get("turn_count", 0))
+            sid = s["session_id"]
+
+            # Color-code session types
+            if sid == "cli":
+                sid_display = "[green]cli[/]"
+            elif sid == "api":
+                sid_display = "[blue]api[/]"
+            elif sid == "webhook":
+                sid_display = "[magenta]webhook[/]"
+            elif sid.isdigit():
+                sid_display = f"[yellow]discord:{sid[-6:]}[/]"
+            else:
+                sid_display = f"[cyan]{sid}[/]"
+
+            error = s.get("error", "")
+            if error:
+                turns = f"[red]?[/]"
+                sid_display += " [red](corrupt)[/]"
+
+            table.add_row(sid_display, turns, started, last)
+
+        console.print(table)
+
+    if not found_any and not agent_name:
+        console.print("\n  [dim]No saved sessions found.[/]")
+
+    console.print()
+
+
+def cmd_session_view(agent_name: str, session_id: str, last_n: int = None):
+    """View conversation history from a saved session."""
+    from rich.console import Console
+    from rich.panel import Panel
+    from rich.markdown import Markdown
+    from core.config import CONFIG_FILE, _load_config
+    from core.agent import Agent
+    from pathlib import Path
+    from core.config import config as cfg_module
+
+    console = Console()
+
+    if not CONFIG_FILE.exists():
+        console.print("\n  [yellow]Run 'alfred setup' first.[/]\n")
+        return
+
+    cfg = _load_config()
+    agents = cfg.get("agents", {})
+
+    if agent_name not in agents:
+        console.print(f"\n  [red]Agent '{agent_name}' not found.[/]")
+        return
+
+    workspace = agents[agent_name].get("workspace", f"workspaces/{agent_name}")
+    workspace_path = Path(workspace)
+    if not workspace_path.is_absolute():
+        workspace_path = cfg_module.PROJECT_ROOT / workspace_path
+
+    messages = Agent.get_session_messages(str(workspace_path), session_id)
+
+    if not messages:
+        console.print(f"\n  [dim]No messages found for session '{session_id}'.[/]\n")
+        return
+
+    # Optionally show only last N turns
+    if last_n:
+        messages = messages[-(last_n * 2):]
+
+    console.print()
+    console.print(Panel(
+        f"[bold cyan]{agent_name}[/] | session: [bold]{session_id}[/] | "
+        f"{len(messages) // 2} turns shown",
+        title="Session History",
+        border_style="cyan",
+    ))
+    console.print()
+
+    for msg in messages:
+        role = msg.get("role", "?")
+        content = msg.get("content", "")
+
+        if role == "user":
+            console.print(f"[bold green]you>[/] {content}")
+        elif role == "assistant":
+            console.print(f"[bold cyan]{agent_name}>[/] {content}")
+        console.print()
+
+
+def cmd_session_export(agent_name: str, session_id: str, output_path: str = None, format: str = "markdown"):
+    """Export a session to a file."""
+    from rich.console import Console
+    from core.config import CONFIG_FILE, _load_config
+    from core.agent import Agent
+    from pathlib import Path
+    from core.config import config as cfg_module
+
+    console = Console()
+
+    if not CONFIG_FILE.exists():
+        console.print("\n  [yellow]Run 'alfred setup' first.[/]\n")
+        return
+
+    cfg = _load_config()
+    agents = cfg.get("agents", {})
+
+    if agent_name not in agents:
+        console.print(f"\n  [red]Agent '{agent_name}' not found.[/]")
+        return
+
+    workspace = agents[agent_name].get("workspace", f"workspaces/{agent_name}")
+    workspace_path = Path(workspace)
+    if not workspace_path.is_absolute():
+        workspace_path = cfg_module.PROJECT_ROOT / workspace_path
+
+    content = Agent.export_session(str(workspace_path), session_id, format=format)
+
+    if not content:
+        console.print(f"\n  [dim]No messages found for session '{session_id}'.[/]\n")
+        return
+
+    if output_path:
+        Path(output_path).write_text(content)
+        console.print(f"\n  [green]\u2713[/] Exported to {output_path}\n")
+    else:
+        # Print to stdout
+        console.print(content)
+
+
+def cmd_session_delete(agent_name: str, session_id: str):
+    """Delete a saved session."""
+    from rich.console import Console
+    from rich.prompt import Confirm
+    from core.config import CONFIG_FILE, _load_config
+    from core.agent import Agent
+    from pathlib import Path
+    from core.config import config as cfg_module
+
+    console = Console()
+
+    if not CONFIG_FILE.exists():
+        console.print("\n  [yellow]Run 'alfred setup' first.[/]\n")
+        return
+
+    cfg = _load_config()
+    agents = cfg.get("agents", {})
+
+    if agent_name not in agents:
+        console.print(f"\n  [red]Agent '{agent_name}' not found.[/]")
+        return
+
+    workspace = agents[agent_name].get("workspace", f"workspaces/{agent_name}")
+    workspace_path = Path(workspace)
+    if not workspace_path.is_absolute():
+        workspace_path = cfg_module.PROJECT_ROOT / workspace_path
+
+    # Check it exists first
+    messages = Agent.get_session_messages(str(workspace_path), session_id)
+    if not messages:
+        console.print(f"\n  [dim]Session '{session_id}' not found or empty.[/]\n")
+        return
+
+    turns = len(messages) // 2
+    if not Confirm.ask(f"\n  Delete session '{session_id}' ({turns} turns)?", default=False):
+        console.print("  [dim]Cancelled.[/]\n")
+        return
+
+    deleted = Agent.delete_session(str(workspace_path), session_id)
+    if deleted:
+        console.print(f"  [green]\u2713[/] Session '{session_id}' deleted.\n")
+    else:
+        console.print(f"  [red]Could not delete session.[/]\n")
 
 
 # ─── Tools Commands ──────────────────────────────────────────────
@@ -1819,9 +2311,15 @@ def main():
 
         elif subcmd == "chat":
             if len(sys.argv) < 4:
-                print("Usage: alfred agent chat <name>")
+                print("Usage: alfred agent chat <name> [--session NAME]")
                 return
-            cmd_agent_chat(sys.argv[3])
+            # Parse optional --session flag
+            chat_session_id = None
+            chat_args = sys.argv[4:]
+            for i, arg in enumerate(chat_args):
+                if arg == "--session" and i + 1 < len(chat_args):
+                    chat_session_id = chat_args[i + 1]
+            cmd_agent_chat(sys.argv[3], session_id=chat_session_id)
 
         elif subcmd == "pause":
             if len(sys.argv) < 4:
@@ -1843,7 +2341,7 @@ def main():
 
         elif subcmd == "schedule":
             if len(sys.argv) < 4:
-                print("Usage: alfred agent schedule <add|list|remove> [name] [id]")
+                print("Usage: alfred agent schedule <add|list|remove|enable|disable|run|history|retry> [name] [id]")
                 return
 
             sched_cmd = sys.argv[3].lower()
@@ -1864,9 +2362,39 @@ def main():
                     return
                 cmd_agent_schedule_remove(sys.argv[4], sys.argv[5])
 
+            elif sched_cmd == "enable":
+                if len(sys.argv) < 6:
+                    print("Usage: alfred agent schedule enable <agent_name> <schedule_id>")
+                    return
+                cmd_agent_schedule_enable(sys.argv[4], sys.argv[5])
+
+            elif sched_cmd == "disable":
+                if len(sys.argv) < 6:
+                    print("Usage: alfred agent schedule disable <agent_name> <schedule_id>")
+                    return
+                cmd_agent_schedule_disable(sys.argv[4], sys.argv[5])
+
+            elif sched_cmd == "run":
+                if len(sys.argv) < 6:
+                    print("Usage: alfred agent schedule run <agent_name> <schedule_id>")
+                    return
+                cmd_agent_schedule_run(sys.argv[4], sys.argv[5])
+
+            elif sched_cmd == "history":
+                if len(sys.argv) < 6:
+                    print("Usage: alfred agent schedule history <agent_name> <schedule_id>")
+                    return
+                cmd_agent_schedule_history(sys.argv[4], sys.argv[5])
+
+            elif sched_cmd == "retry":
+                if len(sys.argv) < 6:
+                    print("Usage: alfred agent schedule retry <agent_name> <schedule_id>")
+                    return
+                cmd_agent_schedule_retry(sys.argv[4], sys.argv[5])
+
             else:
                 print(f"Unknown schedule command: {sched_cmd}")
-                print("Available: add, list, remove")
+                print("Available: add, list, remove, enable, disable, run, history, retry")
 
         else:
             print(f"Unknown agent command: {subcmd}")
@@ -1979,6 +2507,58 @@ def main():
         else:
             print(f"Unknown discord command: {subcmd}")
             print("Available: setup, status")
+        return
+
+    # Handle 'session' subcommands
+    if command == "session":
+        if len(sys.argv) < 3:
+            print("Usage: alfred session <list|view|export|delete> [agent] [session_id]")
+            return
+
+        subcmd = sys.argv[2].lower()
+
+        if subcmd == "list":
+            agent_name = sys.argv[3] if len(sys.argv) > 3 else None
+            cmd_session_list(agent_name)
+
+        elif subcmd == "view":
+            if len(sys.argv) < 5:
+                print("Usage: alfred session view <agent> <session_id> [--last N]")
+                return
+            # Parse optional --last flag
+            last_n = None
+            view_args = sys.argv[5:]
+            for i, arg in enumerate(view_args):
+                if arg == "--last" and i + 1 < len(view_args):
+                    try:
+                        last_n = int(view_args[i + 1])
+                    except ValueError:
+                        pass
+            cmd_session_view(sys.argv[3], sys.argv[4], last_n=last_n)
+
+        elif subcmd == "export":
+            if len(sys.argv) < 5:
+                print("Usage: alfred session export <agent> <session_id> [--output FILE] [--format text|markdown]")
+                return
+            output_path = None
+            fmt = "markdown"
+            export_args = sys.argv[5:]
+            for i, arg in enumerate(export_args):
+                if arg == "--output" and i + 1 < len(export_args):
+                    output_path = export_args[i + 1]
+                elif arg == "--format" and i + 1 < len(export_args):
+                    fmt = export_args[i + 1]
+            cmd_session_export(sys.argv[3], sys.argv[4], output_path=output_path, format=fmt)
+
+        elif subcmd == "delete":
+            if len(sys.argv) < 5:
+                print("Usage: alfred session delete <agent> <session_id>")
+                return
+            cmd_session_delete(sys.argv[3], sys.argv[4])
+
+        else:
+            print(f"Unknown session command: {subcmd}")
+            print("Available: list, view, export, delete")
         return
 
     commands = {

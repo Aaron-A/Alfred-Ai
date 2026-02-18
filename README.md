@@ -67,9 +67,19 @@ alfred agent chat               Interactive chat with an agent
 alfred agent pause / resume     Pause or resume an agent
 alfred agent delete             Delete an agent
 
-alfred agent schedule add       Add a scheduled task
-alfred agent schedule list      List scheduled tasks
+alfred agent schedule add       Add a scheduled task (with optional retry config)
+alfred agent schedule list      List scheduled tasks (shows stats + next run)
 alfred agent schedule remove    Remove a scheduled task
+alfred agent schedule enable    Resume a paused schedule
+alfred agent schedule disable   Pause a schedule without removing it
+alfred agent schedule run       Manually trigger a schedule right now
+alfred agent schedule history   Show run history with success/fail stats
+alfred agent schedule retry     Configure retry settings (max retries, delay)
+
+alfred session list [agent]     List all saved conversation sessions
+alfred session view <a> <id>    View a session's conversation history
+alfred session export <a> <id>  Export session to markdown or text
+alfred session delete <a> <id>  Delete a saved session
 
 alfred tools list               List all available tools
 alfred tools list <agent>       List tools for a specific agent
@@ -77,9 +87,25 @@ alfred tools list <agent>       List tools for a specific agent
 alfred discord setup            Configure Discord bot (token, channels, agents)
 alfred discord status           Show Discord channel mappings
 
-alfred api start               Start HTTP API server (port 7700)
+alfred api start               Start API + web dashboard (port 7700)
 alfred api start --port 8080   Start on custom port
 ```
+
+## Web Dashboard
+
+Start the API server and open `http://localhost:7700` in your browser:
+
+```bash
+alfred api start
+```
+
+The dashboard shows:
+- **Stats grid** — agent count, total messages, token usage, avg response time, Discord health
+- **Agents tab** — all agents with status, provider/model, session count, metrics
+- **Schedules tab** — all scheduled tasks with run stats, success rates, next fire time
+- **Metrics tab** — per-agent cards with detailed breakdowns and recent errors
+
+Auto-refreshes every 10 seconds. Uses the WatchTower dark theme.
 
 ## Architecture
 
@@ -133,6 +159,12 @@ alfred-ai/
     datetime_info.py  Current date/time, timezone conversions, date math
     calculator.py     Safe math expression evaluator
     file_ops.py       Read/write/list files in agent workspace
+  static/
+    dashboard.html    Web dashboard (single page)
+    css/
+      dashboard.css   WatchTower dark theme
+    js/
+      dashboard.js    API fetching, rendering, auto-refresh
 ```
 
 ### Key Concepts
@@ -159,9 +191,17 @@ alfred-ai/
 
 **Multi-agent delegation** lets agents hand tasks to each other. `delegate_to` runs a task synchronously on another agent and returns the result. `send_message` queues async messages to another agent's inbox. Agents see unread inbox notifications in their system prompt.
 
-**Session persistence** saves conversation history to disk after every interaction. On restart, agents resume where they left off. A sliding window keeps the last 50 turns (configurable), trimming oldest messages first. Discord channels get separate sessions from CLI chat.
+**Session persistence** saves conversation history to disk after every interaction. On restart, agents resume where they left off. A sliding window keeps the last 50 turns (configurable), trimming oldest messages first. Discord channels, API callers, and CLI each get separate sessions. Use `alfred agent chat alfred --session research` for named sessions, `alfred session list` to see all saved conversations, `alfred session view alfred cli` to review history, and `alfred session export alfred cli --output chat.md` to export.
 
-**Discord integration** maps channels to agents. Each channel gets its own agent instance for thread safety. Thread messages inherit their parent channel's agent. Configure with `alfred discord setup`, then `alfred start` launches the bot automatically.
+**Streaming** is supported across all providers. The API offers an SSE endpoint (`/v1/chat/stream`) for real-time token streaming. Discord supports optional progressive message editing — set `"stream": true` in discord config or per-channel to see responses appear as they're generated.
+
+**Token tracking** is automatic. Every LLM call records input/output token counts per agent. View via `GET /v1/metrics` or in the agent status. Cumulative totals track across the session.
+
+**Webhooks** let external services trigger agents. POST to `/v1/webhook/{agent}` with an event type and message. Supports optional authentication via `webhook_secret` in agent config. Use for CI/CD notifications, price alerts, monitoring events, or any external integration.
+
+**Scheduling** uses cron expressions to run agent tasks on a timer. Add schedules with `alfred agent schedule add trader`, view with `schedule list`, and manually trigger with `schedule run`. Each schedule tracks full run history (last 20 runs) with success/fail stats, elapsed time, and consecutive failure count. Failed tasks can auto-retry with configurable `max_retries` (1-3) and `retry_delay_seconds`. Missed runs are caught up on startup (within a 1-hour window). Use `schedule enable/disable` to pause without removing, and `schedule history` to see detailed execution logs.
+
+**Discord integration** maps channels to agents. Each channel gets its own agent instance for thread safety. Thread messages inherit their parent channel's agent. Configure with `alfred discord setup`, then `alfred start` launches the bot automatically. The daemon writes a heartbeat file for health monitoring — `alfred status` shows if the bot is healthy or unresponsive.
 
 ## Configuration
 
@@ -225,23 +265,52 @@ alfred api start --port 8080  # Custom port
 Interactive docs at `http://localhost:7700/docs`. Key endpoints:
 
 ```
-POST /v1/chat              Send a message to an agent
+POST /v1/chat              Send a message to an agent (returns full response)
+POST /v1/chat/stream       Stream a response via SSE (Server-Sent Events)
+POST /v1/webhook/{agent}   Send an external event to an agent
 POST /v1/memory/search     Search vector memory
 POST /v1/memory/store      Store a new memory
 GET  /v1/agents            List all agents
 GET  /v1/agents/{name}     Agent details + session info
 POST /v1/agents/{name}/reset  Reset an agent's session
+GET  /v1/sessions/{agent}  List saved sessions for an agent
+GET  /v1/sessions/{agent}/{id}  Get session messages (?last=N for recent)
+DELETE /v1/sessions/{agent}/{id}  Delete a session
+GET  /v1/sessions/{agent}/{id}/export  Export as markdown/text
 GET  /v1/status            System status
-GET  /v1/metrics           Agent activity metrics
+GET  /v1/metrics           Agent activity metrics (includes token usage)
 GET  /health               Health check
 ```
 
 Example:
 
 ```bash
+# Standard chat
 curl -X POST http://localhost:7700/v1/chat \
   -H "Content-Type: application/json" \
   -d '{"agent": "alfred", "message": "What do you know about me?"}'
+
+# Streaming (SSE)
+curl -N http://localhost:7700/v1/chat/stream \
+  -H "Content-Type: application/json" \
+  -d '{"agent": "alfred", "message": "Tell me a story"}'
+
+# Webhook (external event trigger)
+curl -X POST http://localhost:7700/v1/webhook/trader \
+  -H "Content-Type: application/json" \
+  -d '{"event": "price_alert", "message": "TSLA dropped 5%", "data": {"symbol": "TSLA"}}'
+
+# List sessions
+curl http://localhost:7700/v1/sessions/alfred
+
+# View last 5 turns from CLI session
+curl http://localhost:7700/v1/sessions/alfred/cli?last=5
+
+# Export session as markdown
+curl http://localhost:7700/v1/sessions/alfred/cli/export
+
+# Delete a session
+curl -X DELETE http://localhost:7700/v1/sessions/alfred/cli
 ```
 
 ## Web Search

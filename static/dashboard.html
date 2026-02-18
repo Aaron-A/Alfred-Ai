@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Alfred AI - Dashboard</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/css/dashboard.css">
+</head>
+<body>
+
+<!-- ═════════ HEADER ═════════ -->
+<header class="header">
+  <div class="header-left">
+    <h1 class="logo">ALFRED</h1>
+    <span class="subtitle">Agent Framework</span>
+  </div>
+  <div class="header-right">
+    <span class="refresh-info" id="refreshInfo"></span>
+    <div class="status-indicator" id="statusIndicator">
+      <span class="status-dot" id="statusDot"></span>
+      <span id="statusText">connecting...</span>
+    </div>
+  </div>
+</header>
+
+<!-- ═════════ STATS GRID ═════════ -->
+<div class="stats-grid" id="statsGrid">
+  <div class="stat-card">
+    <div class="stat-label">AGENTS</div>
+    <div class="stat-value stat-value--cyan" id="statAgents">-</div>
+    <div class="stat-sub" id="statAgentsSub">loading...</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">MESSAGES</div>
+    <div class="stat-value stat-value--blue" id="statMessages">-</div>
+    <div class="stat-sub" id="statMessagesSub">&nbsp;</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">TOKENS</div>
+    <div class="stat-value stat-value--orange" id="statTokens">-</div>
+    <div class="stat-sub" id="statTokensSub">&nbsp;</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">AVG RESPONSE</div>
+    <div class="stat-value" id="statAvgMs">-</div>
+    <div class="stat-sub" id="statAvgMsSub">&nbsp;</div>
+  </div>
+  <div class="stat-card">
+    <div class="stat-label">DISCORD</div>
+    <div class="stat-value stat-value--green" id="statDiscord">-</div>
+    <div class="stat-sub" id="statDiscordSub">&nbsp;</div>
+  </div>
+</div>
+
+<!-- ═════════ TABS ═════════ -->
+<div class="tabs">
+  <button class="tab-btn active" data-tab="agents">AGENTS</button>
+  <button class="tab-btn" data-tab="schedules">SCHEDULES</button>
+  <button class="tab-btn" data-tab="metrics">METRICS</button>
+</div>
+
+<!-- ═════════ AGENTS TAB ═════════ -->
+<div class="tab-panel active" id="tab-agents">
+  <div class="table-wrap">
+    <table class="data-table" id="agentsTable">
+      <thead>
+        <tr>
+          <th>Agent</th>
+          <th>Status</th>
+          <th>Provider / Model</th>
+          <th>Sessions</th>
+          <th>Messages</th>
+          <th>Tokens</th>
+          <th>Errors</th>
+        </tr>
+      </thead>
+      <tbody id="agentsBody">
+        <tr><td colspan="7" class="text-dim" style="text-align:center;padding:24px;">Loading...</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ═════════ SCHEDULES TAB ═════════ -->
+<div class="tab-panel" id="tab-schedules">
+  <div class="table-wrap">
+    <table class="data-table" id="schedulesTable">
+      <thead>
+        <tr>
+          <th>Agent</th>
+          <th>ID</th>
+          <th>Schedule</th>
+          <th>Task</th>
+          <th>Status</th>
+          <th>Runs</th>
+          <th>Last Run</th>
+          <th>Next Run</th>
+        </tr>
+      </thead>
+      <tbody id="schedulesBody">
+        <tr><td colspan="8" class="text-dim" style="text-align:center;padding:24px;">Loading...</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ═════════ METRICS TAB ═════════ -->
+<div class="tab-panel" id="tab-metrics">
+  <div class="metrics-grid" id="metricsGrid">
+    <div class="empty-state">
+      <div class="empty-state-icon">&#9776;</div>
+      Loading metrics...
+    </div>
+  </div>
+</div>
+
+<script src="/static/js/dashboard.js"></script>
+</body>
+</html>

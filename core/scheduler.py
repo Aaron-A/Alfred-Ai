@@ -42,6 +42,23 @@ from .config import _load_config, _save_config
 
 
 @dataclass
+class ScheduleRun:
+    """A single execution record for a scheduled task."""
+    timestamp: str  # ISO timestamp
+    result: str  # "success" or error message
+    elapsed_ms: int = 0  # How long the run took
+    is_catchup: bool = False  # Was this a missed-run catchup?
+    is_retry: bool = False  # Was this a retry attempt?
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "ScheduleRun":
+        return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
+
+
+@dataclass
 class Schedule:
     """A scheduled task for an agent."""
     id: str
@@ -52,12 +69,62 @@ class Schedule:
     last_result: str = ""  # "success" or error message
     created_at: str = ""
 
+    # Retry settings
+    max_retries: int = 0  # 0 = no retry, 1-3 = retry on failure
+    retry_delay_seconds: int = 30  # Wait between retries
+
+    # Run statistics
+    run_count: int = 0
+    success_count: int = 0
+    fail_count: int = 0
+    consecutive_failures: int = 0
+
+    # Run history (last N runs, newest first)
+    history: list = field(default_factory=list)
+
     def __post_init__(self):
         if not self.created_at:
             self.created_at = datetime.now().isoformat()
+        # Deserialize history dicts into ScheduleRun objects
+        if self.history and isinstance(self.history[0], dict):
+            self.history = [ScheduleRun.from_dict(h) for h in self.history]
 
     def to_dict(self) -> dict:
-        return asdict(self)
+        d = asdict(self)
+        # Ensure history is serializable
+        d["history"] = [h if isinstance(h, dict) else asdict(h) for h in (self.history or [])]
+        return d
+
+    def record_run(self, result: str, elapsed_ms: int = 0, is_catchup: bool = False, is_retry: bool = False):
+        """Record a run in history and update stats."""
+        run = ScheduleRun(
+            timestamp=datetime.now().isoformat(),
+            result=result,
+            elapsed_ms=elapsed_ms,
+            is_catchup=is_catchup,
+            is_retry=is_retry,
+        )
+        self.history.insert(0, run)
+        # Keep only the last 20 runs
+        self.history = self.history[:20]
+
+        self.last_run = run.timestamp
+        self.last_result = result
+        self.run_count += 1
+
+        if result == "success":
+            self.success_count += 1
+            self.consecutive_failures = 0
+        else:
+            self.fail_count += 1
+            self.consecutive_failures += 1
+
+    @property
+    def success_rate(self) -> float:
+        """Success rate as a percentage (0-100)."""
+        if self.run_count == 0:
+            return 0.0
+        return (self.success_count / self.run_count) * 100
 
     @classmethod
     def from_dict(cls, data: dict) -> "Schedule":
@@ -128,6 +195,31 @@ def cron_matches(cron_str: str, dt: datetime = None) -> bool:
         and dt.month in months
         and cron_dow in dows
     )
+
+
+def next_run(cron_str: str, after: datetime = None, max_search_days: int = 7) -> Optional[datetime]:
+    """
+    Calculate the next time a cron expression will match.
+
+    Scans forward minute-by-minute from `after` (default: now).
+    Returns None if no match found within max_search_days.
+    """
+    if after is None:
+        after = datetime.now()
+
+    # Start from the next minute
+    check = after.replace(second=0, microsecond=0)
+    from datetime import timedelta
+    check += timedelta(minutes=1)
+
+    end = after + timedelta(days=max_search_days)
+
+    while check <= end:
+        if cron_matches(cron_str, check):
+            return check
+        check += timedelta(minutes=1)
+
+    return None
 
 
 def describe_cron(cron_str: str) -> str:
@@ -228,8 +320,9 @@ def toggle_schedule(agent_name: str, schedule_id: str, enabled: bool) -> bool:
     return False
 
 
-def update_schedule_result(agent_name: str, schedule_id: str, result: str):
-    """Update the last_run and last_result for a schedule."""
+def update_schedule_result(agent_name: str, schedule_id: str, result: str,
+                           elapsed_ms: int = 0, is_catchup: bool = False, is_retry: bool = False):
+    """Record a run result with full history tracking."""
     cfg = _load_config()
 
     if agent_name not in cfg.get("agents", {}):
@@ -237,8 +330,16 @@ def update_schedule_result(agent_name: str, schedule_id: str, result: str):
 
     for s in cfg["agents"][agent_name].get("schedules", []):
         if s.get("id") == schedule_id:
-            s["last_run"] = datetime.now().isoformat()
-            s["last_result"] = result[:200]  # Truncate
+            schedule = Schedule.from_dict(s)
+            schedule.record_run(
+                result=result[:200],
+                elapsed_ms=elapsed_ms,
+                is_catchup=is_catchup,
+                is_retry=is_retry,
+            )
+            # Write the updated schedule back
+            updated = schedule.to_dict()
+            s.update(updated)
             _save_config(cfg)
             return
 
@@ -448,7 +549,7 @@ class Scheduler:
                     self._execute_schedule(agent_name, schedule)
 
     def _execute_schedule(self, agent_name: str, schedule: Schedule, is_catchup: bool = False):
-        """Execute a scheduled task in a separate thread."""
+        """Execute a scheduled task in a separate thread with retry support."""
         tag = " (catchup)" if is_catchup else ""
         logger.info(f"Running '{schedule.id}' for {agent_name}{tag}: {schedule.task[:60]}")
 
@@ -458,16 +559,47 @@ class Scheduler:
             return
 
         def _run():
-            try:
-                self._runner(agent_name, schedule.task)
-                update_schedule_result(agent_name, schedule.id, "success")
-                logger.info(f"'{schedule.id}' completed")
-            except Exception as e:
-                update_schedule_result(agent_name, schedule.id, f"error: {e}")
-                logger.error(f"'{schedule.id}' failed: {e}")
-            finally:
-                # Clean up from active tasks
-                self._active_tasks.pop(schedule.id, None)
+            max_attempts = 1 + max(0, min(schedule.max_retries, 3))  # Cap at 3 retries
+            retry_delay = max(5, schedule.retry_delay_seconds)  # Min 5s between retries
+
+            for attempt in range(max_attempts):
+                is_retry = attempt > 0
+                if is_retry:
+                    logger.info(f"'{schedule.id}' retry {attempt}/{schedule.max_retries}")
+                    time.sleep(retry_delay)
+                    # Check if scheduler was stopped during the wait
+                    if not self._running:
+                        return
+
+                start_time = time.monotonic()
+                try:
+                    self._runner(agent_name, schedule.task)
+                    elapsed = int((time.monotonic() - start_time) * 1000)
+                    update_schedule_result(
+                        agent_name, schedule.id, "success",
+                        elapsed_ms=elapsed, is_catchup=is_catchup, is_retry=is_retry,
+                    )
+                    logger.info(f"'{schedule.id}' completed in {elapsed}ms")
+                    break  # Success — done
+
+                except Exception as e:
+                    elapsed = int((time.monotonic() - start_time) * 1000)
+                    is_last_attempt = attempt == max_attempts - 1
+                    result = f"error: {e}"
+
+                    if not is_last_attempt:
+                        result = f"error (will retry): {e}"
+                        logger.warning(f"'{schedule.id}' failed (attempt {attempt + 1}/{max_attempts}): {e}")
+                    else:
+                        logger.error(f"'{schedule.id}' failed: {e}")
+
+                    update_schedule_result(
+                        agent_name, schedule.id, result,
+                        elapsed_ms=elapsed, is_catchup=is_catchup, is_retry=is_retry,
+                    )
+
+            # Clean up from active tasks when done (success or all retries exhausted)
+            self._active_tasks.pop(schedule.id, None)
 
         task_thread = threading.Thread(
             target=_run, daemon=True,
@@ -488,3 +620,74 @@ def get_all_schedules() -> dict[str, list[Schedule]]:
         if schedules:
             result[agent_name] = schedules
     return result
+
+
+def get_schedule(agent_name: str, schedule_id: str) -> Optional[Schedule]:
+    """Get a specific schedule by ID."""
+    cfg = _load_config()
+    agent_cfg = cfg.get("agents", {}).get(agent_name, {})
+    for s in agent_cfg.get("schedules", []):
+        if s.get("id") == schedule_id:
+            return Schedule.from_dict(s)
+    return None
+
+
+def get_schedule_history(agent_name: str, schedule_id: str) -> list[ScheduleRun]:
+    """Get run history for a specific schedule."""
+    schedule = get_schedule(agent_name, schedule_id)
+    if not schedule:
+        return []
+    return schedule.history
+
+
+def update_schedule_retries(agent_name: str, schedule_id: str, max_retries: int, retry_delay: int = 30) -> bool:
+    """Update retry settings for a schedule."""
+    cfg = _load_config()
+
+    if agent_name not in cfg.get("agents", {}):
+        return False
+
+    for s in cfg["agents"][agent_name].get("schedules", []):
+        if s.get("id") == schedule_id:
+            s["max_retries"] = max(0, min(max_retries, 3))  # 0-3
+            s["retry_delay_seconds"] = max(5, retry_delay)  # Min 5s
+            _save_config(cfg)
+            return True
+    return False
+
+
+def run_schedule_now(agent_name: str, schedule_id: str, agent_runner=None) -> str:
+    """
+    Manually trigger a scheduled task immediately.
+
+    Args:
+        agent_name: Name of the agent
+        schedule_id: ID of the schedule to run
+        agent_runner: Callable(agent_name, task) -> str
+
+    Returns:
+        The agent's response text, or an error message.
+    """
+    schedule = get_schedule(agent_name, schedule_id)
+    if not schedule:
+        return f"Schedule '{schedule_id}' not found for agent '{agent_name}'"
+
+    if not agent_runner:
+        return "No agent runner configured"
+
+    start_time = time.monotonic()
+    try:
+        result = agent_runner(agent_name, schedule.task)
+        elapsed = int((time.monotonic() - start_time) * 1000)
+        update_schedule_result(
+            agent_name, schedule_id, "success",
+            elapsed_ms=elapsed, is_catchup=False, is_retry=False,
+        )
+        return result
+    except Exception as e:
+        elapsed = int((time.monotonic() - start_time) * 1000)
+        update_schedule_result(
+            agent_name, schedule_id, f"error: {e}",
+            elapsed_ms=elapsed, is_catchup=False, is_retry=False,
+        )
+        raise

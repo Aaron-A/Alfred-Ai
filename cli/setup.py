@@ -121,13 +121,26 @@ def detect_environment() -> dict:
         "ollama_models": [],
         "env_keys": {},
         "existing_config": None,
+        "saved_keys": {},  # API keys already in alfred.json
     }
 
-    # Check for existing config
+    # Check for existing config — preserve saved API keys
     if CONFIG_FILE.exists():
-        with open(CONFIG_FILE) as f:
-            detected["existing_config"] = json.load(f)
-        console.print("  [yellow]![/] Existing alfred.json found")
+        try:
+            with open(CONFIG_FILE) as f:
+                detected["existing_config"] = json.load(f)
+
+            # Extract saved API keys so they survive re-setup
+            existing_providers = detected["existing_config"].get("providers", {})
+            for pid, pcfg in existing_providers.items():
+                saved_key = pcfg.get("api_key", "")
+                if saved_key:
+                    detected["saved_keys"][pid] = saved_key
+                    masked = saved_key[:8] + "..." + saved_key[-4:]
+                    pname = PROVIDERS.get(pid, {}).get("name", pid)
+                    console.print(f"  [green]\u2713[/] {pname} key saved in config: {masked}")
+        except (json.JSONDecodeError, KeyError):
+            console.print("  [yellow]![/] Existing alfred.json found (could not read)")
 
     # Check environment variables for API keys
     for provider_id, prov in PROVIDERS.items():
@@ -135,8 +148,10 @@ def detect_environment() -> dict:
             key = os.getenv(prov["env_var"], "")
             if key:
                 detected["env_keys"][provider_id] = key
-                masked = key[:8] + "..." + key[-4:]
-                console.print(f"  [green]\u2713[/] {prov['name']} key found in env: {masked}")
+                # Only show env key if we didn't already show a saved key
+                if provider_id not in detected["saved_keys"]:
+                    masked = key[:8] + "..." + key[-4:]
+                    console.print(f"  [green]\u2713[/] {prov['name']} key found in env: {masked}")
 
     # Check Ollama
     console.print("  [dim]Checking for Ollama...[/]", end="")
@@ -223,14 +238,17 @@ def configure_provider(provider_id: str, detected: dict) -> dict:
     console.print(Rule(f"[bold]{prov['name']}", style="cyan"))
     console.print()
 
-    # Handle API key
+    # Handle API key — priority: saved config > env var > ask user
     if prov["requires_key"]:
-        # Check if we already have a key from env
-        existing_key = detected["env_keys"].get(provider_id, "")
+        saved_key = detected.get("saved_keys", {}).get(provider_id, "")
+        env_key = detected["env_keys"].get(provider_id, "")
+        existing_key = saved_key or env_key
+        key_source = "config" if saved_key else "env" if env_key else ""
+
         if existing_key:
             masked = existing_key[:8] + "..." + existing_key[-4:]
             use_existing = Confirm.ask(
-                f"  Use existing key from env? ({masked})",
+                f"  Use existing key from {key_source}? ({masked})",
                 default=True,
             )
             if use_existing:
@@ -353,8 +371,14 @@ def write_config(
     providers_config: dict,
     default_provider: str,
     embeddings_config: dict,
+    existing_config: dict = None,
 ):
-    """Write the final alfred.json config."""
+    """
+    Write the final alfred.json config.
+
+    Preserves sections from existing config that setup doesn't manage:
+    agents, discord, schedules, webhook_secret, etc.
+    """
     alfred_config = {
         "version": "0.1.0",
         "llm": {
@@ -381,6 +405,33 @@ def write_config(
             if "api_key" in cfg:
                 provider_entry["api_key"] = cfg["api_key"]
             alfred_config["providers"][pid] = provider_entry
+
+    # Preserve existing config sections that setup doesn't touch
+    if existing_config:
+        # Keep agents (with all their settings, schedules, webhook secrets, etc.)
+        if "agents" in existing_config:
+            alfred_config["agents"] = existing_config["agents"]
+
+        # Keep Discord config (bot token, guild, channel mappings)
+        if "discord" in existing_config:
+            alfred_config["discord"] = existing_config["discord"]
+
+        # Keep providers that were configured outside of this setup run
+        # (e.g., brave search added via `alfred provider add brave`)
+        for pid, pcfg in existing_config.get("providers", {}).items():
+            if pid not in alfred_config["providers"]:
+                alfred_config["providers"][pid] = pcfg
+
+        # Preserve LLM primary/secondary structure if it exists
+        existing_llm = existing_config.get("llm", {})
+        if "secondary" in existing_llm:
+            alfred_config["llm"]["secondary"] = existing_llm["secondary"]
+        if "primary" in existing_llm and "secondary" in existing_llm:
+            # Existing config uses primary/secondary format — update primary, keep secondary
+            alfred_config["llm"]["primary"] = {
+                "provider": default_provider,
+                "model": providers_config[default_provider].get("model", ""),
+            }
 
     _save_config(alfred_config)
     return alfred_config
@@ -441,6 +492,24 @@ def create_default_agent(config_data: dict, user_name: str = ""):
 
     console.print(Rule("[bold]Default Agent", style="cyan"))
     console.print()
+
+    # Check if alfred agent already exists (re-running setup)
+    cfg = _load_config()
+    existing_alfred = cfg.get("agents", {}).get("alfred")
+
+    if existing_alfred:
+        console.print("  [green]\u2713[/] Agent [bold cyan]Alfred[/] already exists")
+        console.print("  [dim]Keeping existing workspace and settings.[/]")
+
+        # Just update the creator name if it changed
+        if user_name and existing_alfred.get("creator") != user_name:
+            existing_alfred["creator"] = user_name
+            _save_config(cfg)
+            console.print(f"    Updated creator: [bold]{user_name}[/]")
+
+        console.print()
+        return
+
     console.print("  Creating your default agent: [bold cyan]Alfred[/]")
     console.print("  [dim]He'll be available in all channels unless you assign a specialist.[/]")
     console.print()
@@ -496,21 +565,24 @@ def run_setup():
     print_banner()
 
     # Check for existing config
+    is_reconfigure = False
     if CONFIG_FILE.exists():
         console.print(f"  [yellow]Existing configuration found at {CONFIG_FILE}[/]")
-        if not Confirm.ask("  Overwrite existing configuration?", default=False):
+        console.print("  [dim]Your API keys, agents, and Discord settings will be preserved.[/]")
+        if not Confirm.ask("  Re-run setup?", default=True):
             console.print("  [dim]Setup cancelled.[/]")
             return
+        is_reconfigure = True
 
     console.print()
 
-    # Step 1: Detect environment
+    # Step 1: Detect environment (loads saved keys from existing config)
     detected = detect_environment()
 
     # Step 2: Select providers
     selected = select_providers(detected)
 
-    # Step 3: Configure each provider
+    # Step 3: Configure each provider (offers saved keys by default)
     providers_config = {}
     for pid in selected:
         providers_config[pid] = configure_provider(pid, detected)
@@ -521,16 +593,27 @@ def run_setup():
     # Step 5: Configure embeddings
     embeddings = configure_embeddings()
 
-    # Step 6: Write config
-    config_data = write_config(providers_config, default, embeddings)
+    # Step 6: Write config (preserves agents, discord, etc. from existing config)
+    config_data = write_config(
+        providers_config, default, embeddings,
+        existing_config=detected.get("existing_config"),
+    )
 
     # Step 7: Get user's name (used as agent creator + USER.md)
     console.print()
     console.print(Rule("[bold]About You", style="cyan"))
     console.print()
-    user_name = Prompt.ask("  Your name", default="")
+    existing_creator = ""
+    if detected.get("existing_config"):
+        # Try to find the existing creator name from the alfred agent
+        agents = detected["existing_config"].get("agents", {})
+        for acfg in agents.values():
+            if acfg.get("creator"):
+                existing_creator = acfg["creator"]
+                break
+    user_name = Prompt.ask("  Your name", default=existing_creator)
 
-    # Step 8: Create default "alfred" agent
+    # Step 8: Create default "alfred" agent (skips if workspace already exists during reconfigure)
     create_default_agent(config_data, user_name=user_name)
 
     # Step 9: Summary

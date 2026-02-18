@@ -27,7 +27,7 @@ from datetime import datetime, timezone
 from dataclasses import dataclass, field
 
 from .config import config, _load_config
-from .llm import LLMClient
+from .llm import LLMClient, LLMResponse
 from .memory import MemoryStore
 from .tools import ToolRegistry, get_tool_registry, register_builtin_tools
 from .logging import get_logger, metrics
@@ -542,7 +542,6 @@ class Agent:
             Agent's response string
         """
         start_time = time.monotonic()
-        tool_call_count = 0
 
         try:
             # Step 1: Auto-search memory for relevant context (scoped to this agent)
@@ -566,10 +565,13 @@ class Agent:
             use_tools = len(available_tools) > 0
 
             # Step 4: Run the LLM loop (may involve multiple tool calls)
+            # Returns (response_text, tool_call_count, input_tokens, output_tokens)
             if self.llm.provider == "anthropic":
-                response = self._run_anthropic_loop(message, full_system, available_tools)
+                response, tool_call_count, input_tokens, output_tokens = \
+                    self._run_anthropic_loop(message, full_system, available_tools)
             else:
-                response = self._run_openai_loop(message, full_system, available_tools)
+                response, tool_call_count, input_tokens, output_tokens = \
+                    self._run_openai_loop(message, full_system, available_tools)
 
             # Step 5: Add to conversation history and persist
             self.history.append({"role": "user", "content": message})
@@ -579,10 +581,17 @@ class Agent:
             self.history = self._trim_history(self.history)
             self._save_session()
 
-            # Step 6: Record metrics
+            # Step 6: Record metrics (with token usage)
             elapsed_ms = int((time.monotonic() - start_time) * 1000)
-            metrics.record_message(self.config.name, elapsed_ms=elapsed_ms, tool_calls=tool_call_count)
-            logger.info(f"{self.config.name}: responded in {elapsed_ms}ms")
+            metrics.record_message(
+                self.config.name,
+                elapsed_ms=elapsed_ms,
+                tool_calls=tool_call_count,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+            )
+            token_info = f", {input_tokens}+{output_tokens} tokens" if input_tokens else ""
+            logger.info(f"{self.config.name}: responded in {elapsed_ms}ms{token_info}")
 
             return response
 
@@ -592,14 +601,23 @@ class Agent:
             logger.error(f"{self.config.name}: error after {elapsed_ms}ms: {e}")
             raise
 
-    def _run_anthropic_loop(self, message: str, system: str, tool_names: list[str]) -> str:
-        """Agent loop using Anthropic's native tool_use API."""
+    def _run_anthropic_loop(self, message: str, system: str, tool_names: list[str]) -> tuple[str, int, int, int]:
+        """
+        Agent loop using Anthropic's native tool_use API.
+
+        Returns:
+            (response_text, tool_call_count, total_input_tokens, total_output_tokens)
+        """
         import anthropic
 
         messages = list(self.history)
         messages.append({"role": "user", "content": message})
 
         tools = self.registry.schemas(tool_names, format="anthropic") if tool_names else []
+
+        total_input_tokens = 0
+        total_output_tokens = 0
+        tool_call_count = 0
 
         for round_num in range(self.config.max_tool_rounds):
             kwargs = {
@@ -614,6 +632,12 @@ class Agent:
 
             response = self.llm.anthropic_client.messages.create(**kwargs)
 
+            # Accumulate token usage across rounds
+            usage = getattr(response, "usage", None)
+            if usage:
+                total_input_tokens += getattr(usage, "input_tokens", 0)
+                total_output_tokens += getattr(usage, "output_tokens", 0)
+
             # Check if the response contains tool calls
             if response.stop_reason == "tool_use":
                 # Process tool calls
@@ -623,6 +647,7 @@ class Agent:
                 tool_results = []
                 for block in assistant_content:
                     if block.type == "tool_use":
+                        tool_call_count += 1
                         logger.info(f"{self.config.name}: tool {block.name}({json.dumps(block.input)[:80]})")
                         result = self.registry.execute(block.name, block.input)
                         tool_results.append({
@@ -636,12 +661,17 @@ class Agent:
             else:
                 # Final text response
                 text_parts = [b.text for b in response.content if hasattr(b, "text")]
-                return "\n".join(text_parts)
+                return "\n".join(text_parts), tool_call_count, total_input_tokens, total_output_tokens
 
-        return "Error: Max tool rounds exceeded"
+        return "Error: Max tool rounds exceeded", tool_call_count, total_input_tokens, total_output_tokens
 
-    def _run_openai_loop(self, message: str, system: str, tool_names: list[str]) -> str:
-        """Agent loop using OpenAI-compatible API (xAI, OpenAI, Ollama)."""
+    def _run_openai_loop(self, message: str, system: str, tool_names: list[str]) -> tuple[str, int, int, int]:
+        """
+        Agent loop using OpenAI-compatible API (xAI, OpenAI, Ollama).
+
+        Returns:
+            (response_text, tool_call_count, total_input_tokens, total_output_tokens)
+        """
         messages = []
         if system:
             messages.append({"role": "system", "content": system})
@@ -649,6 +679,10 @@ class Agent:
         messages.append({"role": "user", "content": message})
 
         tools = self.registry.schemas(tool_names, format="openai") if tool_names else None
+
+        total_input_tokens = 0
+        total_output_tokens = 0
+        tool_call_count = 0
 
         for round_num in range(self.config.max_tool_rounds):
             # Build request
@@ -680,9 +714,14 @@ class Agent:
                     result = json.loads(resp.read().decode("utf-8"))
             except urllib.error.HTTPError as e:
                 body = e.read().decode("utf-8", errors="replace")
-                return f"LLM Error ({e.code}): {body}"
+                return f"LLM Error ({e.code}): {body}", tool_call_count, total_input_tokens, total_output_tokens
             except urllib.error.URLError as e:
-                return f"Connection error: {e.reason}"
+                return f"Connection error: {e.reason}", tool_call_count, total_input_tokens, total_output_tokens
+
+            # Accumulate token usage
+            usage = result.get("usage", {})
+            total_input_tokens += usage.get("prompt_tokens", 0)
+            total_output_tokens += usage.get("completion_tokens", 0)
 
             choice = result["choices"][0]
             msg = choice["message"]
@@ -694,6 +733,7 @@ class Agent:
                 for tc in msg["tool_calls"]:
                     fn_name = tc["function"]["name"]
                     fn_args = json.loads(tc["function"]["arguments"])
+                    tool_call_count += 1
                     logger.info(f"{self.config.name}: tool {fn_name}({json.dumps(fn_args)[:80]})")
                     tool_result = self.registry.execute(fn_name, fn_args)
 
@@ -704,9 +744,72 @@ class Agent:
                     })
                 continue  # Loop back
             else:
-                return msg.get("content", "")
+                return msg.get("content", ""), tool_call_count, total_input_tokens, total_output_tokens
 
-        return "Error: Max tool rounds exceeded"
+        return "Error: Max tool rounds exceeded", tool_call_count, total_input_tokens, total_output_tokens
+
+    def run_stream(self, message: str, context: dict = None):
+        """
+        Stream agent's response token by token.
+
+        NOTE: Streaming bypasses the tool loop — the LLM generates a direct
+        text response without tool calls. Use run() for tool-enabled interactions.
+
+        Args:
+            message: User message
+            context: Optional context dict
+
+        Yields:
+            str: Text chunks as they arrive from the LLM
+        """
+        start_time = time.monotonic()
+
+        try:
+            # Step 1: Memory search
+            memory_context = ""
+            if self.config.auto_memory_search and self.memory:
+                memories = self.memory.search(
+                    query=message,
+                    top_k=self.config.memory_search_top_k,
+                    where=f"agent_id = '{self.config.name}'",
+                )
+                if memories:
+                    memory_context = self._format_memories(memories)
+
+            # Step 2: Build system prompt
+            full_system = self.system_prompt
+            if memory_context:
+                full_system += f"\n\n## Relevant Memories (auto-recalled)\n{memory_context}"
+
+            # Step 3: Stream from LLM (no tools — direct response)
+            full_response = []
+            for chunk in self.llm.stream(
+                prompt=message,
+                system=full_system,
+                context=self.history,
+                max_tokens=4096,
+                temperature=self.config.temperature,
+            ):
+                full_response.append(chunk)
+                yield chunk
+
+            # Step 4: Save to history
+            response_text = "".join(full_response)
+            self.history.append({"role": "user", "content": message})
+            self.history.append({"role": "assistant", "content": response_text})
+            self.history = self._trim_history(self.history)
+            self._save_session()
+
+            # Step 5: Metrics
+            elapsed_ms = int((time.monotonic() - start_time) * 1000)
+            metrics.record_message(self.config.name, elapsed_ms=elapsed_ms)
+            logger.info(f"{self.config.name}: streamed response in {elapsed_ms}ms")
+
+        except Exception as e:
+            elapsed_ms = int((time.monotonic() - start_time) * 1000)
+            metrics.record_error(self.config.name, str(e))
+            logger.error(f"{self.config.name}: stream error after {elapsed_ms}ms: {e}")
+            raise
 
     def _format_memories(self, memories: list[dict]) -> str:
         """Format memory search results for injection into system prompt."""
@@ -755,6 +858,183 @@ class Agent:
             "history_length": len(self.history),
             "turns": len(self.history) // 2,
         }
+
+    # ─── Session Management ──────────────────────────────────
+
+    @staticmethod
+    def list_sessions(workspace_path: str) -> list[dict]:
+        """
+        List all saved sessions for an agent workspace.
+
+        Returns a list of session info dicts sorted by last activity (newest first):
+        [
+            {"session_id": "cli", "file": "session.json", "turns": 12, ...},
+            {"session_id": "1473423154759074026", "file": "session_147...json", ...},
+        ]
+        """
+        workspace = Path(workspace_path)
+        sessions = []
+
+        if not workspace.exists():
+            return sessions
+
+        # Match session.json and session_*.json
+        session_files = list(workspace.glob("session.json")) + list(workspace.glob("session_*.json"))
+        for session_file in sorted(set(session_files), key=lambda f: f.name, reverse=True):
+            # Skip temp files from atomic writes
+            if ".tmp" in session_file.name:
+                continue
+
+            try:
+                data = json.loads(session_file.read_text())
+                messages = data.get("messages", [])
+
+                # Derive session_id from filename
+                name = session_file.stem  # "session" or "session_abc123"
+                if name == "session":
+                    session_id = "cli"
+                else:
+                    session_id = name.replace("session_", "", 1)
+
+                sessions.append({
+                    "session_id": session_id,
+                    "file": session_file.name,
+                    "agent": data.get("agent", "?"),
+                    "started_at": data.get("started_at", ""),
+                    "last_activity": data.get("last_activity", ""),
+                    "turn_count": data.get("turn_count", len(messages) // 2),
+                    "message_count": len(messages),
+                })
+            except (json.JSONDecodeError, KeyError, OSError):
+                # Corrupted session file — include it but mark as broken
+                sessions.append({
+                    "session_id": session_file.stem.replace("session_", "", 1) if "_" in session_file.stem else "cli",
+                    "file": session_file.name,
+                    "agent": "?",
+                    "started_at": "",
+                    "last_activity": "",
+                    "turn_count": 0,
+                    "message_count": 0,
+                    "error": "corrupt",
+                })
+
+        # Sort by last_activity descending (most recent first)
+        sessions.sort(key=lambda s: s.get("last_activity", ""), reverse=True)
+        return sessions
+
+    @staticmethod
+    def get_session_messages(workspace_path: str, session_id: str) -> list[dict]:
+        """
+        Load raw messages from a saved session file.
+
+        Returns list of {"role": "user"|"assistant", "content": "..."} dicts.
+        """
+        workspace = Path(workspace_path)
+        if session_id == "cli":
+            session_file = workspace / "session.json"
+        else:
+            session_file = workspace / f"session_{session_id}.json"
+
+        if not session_file.exists():
+            return []
+
+        try:
+            data = json.loads(session_file.read_text())
+            messages = data.get("messages", [])
+            return [m for m in messages if m.get("role") in ("user", "assistant") and m.get("content")]
+        except (json.JSONDecodeError, OSError):
+            return []
+
+    @staticmethod
+    def export_session(workspace_path: str, session_id: str, format: str = "markdown") -> str:
+        """
+        Export a session as formatted text.
+
+        Args:
+            workspace_path: Path to agent workspace
+            session_id: Session to export ("cli", channel ID, etc.)
+            format: "markdown" or "text"
+
+        Returns:
+            Formatted string of the conversation.
+        """
+        workspace = Path(workspace_path)
+        if session_id == "cli":
+            session_file = workspace / "session.json"
+        else:
+            session_file = workspace / f"session_{session_id}.json"
+
+        if not session_file.exists():
+            return ""
+
+        try:
+            data = json.loads(session_file.read_text())
+        except (json.JSONDecodeError, OSError):
+            return ""
+
+        messages = data.get("messages", [])
+        agent_name = data.get("agent", "assistant")
+        started = data.get("started_at", "unknown")
+        turns = data.get("turn_count", len(messages) // 2)
+
+        if format == "markdown":
+            lines = [
+                f"# Conversation with {agent_name}",
+                f"",
+                f"- **Session:** {session_id}",
+                f"- **Started:** {started}",
+                f"- **Turns:** {turns}",
+                f"",
+                f"---",
+                f"",
+            ]
+            for msg in messages:
+                role = msg.get("role", "?")
+                content = msg.get("content", "")
+                if role == "user":
+                    lines.append(f"### You")
+                    lines.append(f"{content}")
+                    lines.append("")
+                elif role == "assistant":
+                    lines.append(f"### {agent_name.title()}")
+                    lines.append(f"{content}")
+                    lines.append("")
+            return "\n".join(lines)
+
+        else:  # plain text
+            lines = [
+                f"Conversation with {agent_name} | Session: {session_id} | Started: {started} | Turns: {turns}",
+                "=" * 60,
+                "",
+            ]
+            for msg in messages:
+                role = msg.get("role", "?")
+                content = msg.get("content", "")
+                if role == "user":
+                    lines.append(f"You: {content}")
+                    lines.append("")
+                elif role == "assistant":
+                    lines.append(f"{agent_name.title()}: {content}")
+                    lines.append("")
+            return "\n".join(lines)
+
+    @staticmethod
+    def delete_session(workspace_path: str, session_id: str) -> bool:
+        """
+        Delete a saved session file.
+
+        Returns True if deleted, False if not found.
+        """
+        workspace = Path(workspace_path)
+        if session_id == "cli":
+            session_file = workspace / "session.json"
+        else:
+            session_file = workspace / f"session_{session_id}.json"
+
+        if session_file.exists():
+            session_file.unlink()
+            return True
+        return False
 
     def __repr__(self):
         return (

@@ -136,17 +136,22 @@ class AgentMetrics:
             "tool_calls": 0,
             "errors": 0,
             "total_elapsed_ms": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
             "last_activity": None,
             "recent_errors": [],  # Last 10 errors
         })
 
     def record_message(self, agent_name: str, elapsed_ms: int = 0,
-                       tool_calls: int = 0):
+                       tool_calls: int = 0,
+                       input_tokens: int = 0, output_tokens: int = 0):
         """Record a successful agent interaction."""
         d = self._data[agent_name]
         d["messages"] += 1
         d["tool_calls"] += tool_calls
         d["total_elapsed_ms"] += elapsed_ms
+        d["input_tokens"] += input_tokens
+        d["output_tokens"] += output_tokens
         d["last_activity"] = datetime.now(timezone.utc).isoformat()
 
     def record_error(self, agent_name: str, error: str):
@@ -169,7 +174,7 @@ class AgentMetrics:
             agent_name: Specific agent, or None for all agents.
 
         Returns:
-            Dict with metrics. Includes avg_ms if messages > 0.
+            Dict with metrics. Includes avg_ms and total_tokens if messages > 0.
         """
         if agent_name:
             d = self._data[agent_name]
@@ -178,6 +183,7 @@ class AgentMetrics:
                 result["avg_ms"] = d["total_elapsed_ms"] // d["messages"]
             else:
                 result["avg_ms"] = 0
+            result["total_tokens"] = d["input_tokens"] + d["output_tokens"]
             return result
 
         # All agents

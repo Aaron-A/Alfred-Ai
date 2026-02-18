@@ -39,8 +39,10 @@ DEFAULT_RATE_LIMIT_COOLDOWN = 30     # cooldown after hitting limit
 # PID and log file locations
 PID_FILE = config.PROJECT_ROOT / "data" / "discord.pid"
 LOG_FILE = config.PROJECT_ROOT / "data" / "discord.log"
+HEARTBEAT_FILE = config.PROJECT_ROOT / "data" / "heartbeat"
 
 MAX_MESSAGE_LENGTH = 2000  # Discord's hard limit
+HEARTBEAT_INTERVAL = 30  # seconds
 
 
 def _quiet_noisy_loggers():
@@ -56,6 +58,26 @@ def _quiet_noisy_loggers():
         logging.getLogger(name).setLevel(logging.WARNING)
 
 
+def write_heartbeat():
+    """Write a heartbeat timestamp file (called periodically by the daemon)."""
+    try:
+        HEARTBEAT_FILE.parent.mkdir(parents=True, exist_ok=True)
+        HEARTBEAT_FILE.write_text(f"{time.time()}\n{os.getpid()}")
+    except Exception:
+        pass
+
+
+def read_heartbeat() -> Optional[tuple[float, int]]:
+    """Read the heartbeat file. Returns (timestamp, pid) or None."""
+    if not HEARTBEAT_FILE.exists():
+        return None
+    try:
+        parts = HEARTBEAT_FILE.read_text().strip().split("\n")
+        return float(parts[0]), int(parts[1])
+    except (ValueError, IndexError):
+        return None
+
+
 def is_bot_running() -> Optional[int]:
     """Check if the Discord bot is running. Returns PID if running, None otherwise."""
     if not PID_FILE.exists():
@@ -68,7 +90,36 @@ def is_bot_running() -> Optional[int]:
     except (ValueError, ProcessLookupError, PermissionError):
         # Stale PID file — clean up
         PID_FILE.unlink(missing_ok=True)
+        HEARTBEAT_FILE.unlink(missing_ok=True)
         return None
+
+
+def is_bot_healthy() -> tuple[bool, str]:
+    """
+    Check if the bot is running AND healthy (heartbeat within last 90s).
+
+    Returns:
+        (healthy, status_message)
+    """
+    pid = is_bot_running()
+    if pid is None:
+        return False, "not running"
+
+    heartbeat = read_heartbeat()
+    if heartbeat is None:
+        # Process alive but no heartbeat — still starting up or heartbeat not implemented
+        return True, f"running (PID {pid}, no heartbeat yet)"
+
+    ts, hb_pid = heartbeat
+    age = time.time() - ts
+
+    if hb_pid != pid:
+        return True, f"running (PID {pid}, stale heartbeat from PID {hb_pid})"
+
+    if age > 90:
+        return False, f"unresponsive (PID {pid}, last heartbeat {int(age)}s ago)"
+
+    return True, f"healthy (PID {pid}, heartbeat {int(age)}s ago)"
 
 
 def stop_bot() -> bool:
@@ -79,16 +130,26 @@ def stop_bot() -> bool:
     try:
         os.kill(pid, signal.SIGTERM)
         # Wait briefly for clean shutdown
-        for _ in range(20):  # 2 seconds max
+        for _ in range(40):  # 4 seconds max
             time.sleep(0.1)
             try:
                 os.kill(pid, 0)
             except ProcessLookupError:
                 break
+        else:
+            # Process didn't exit gracefully — force kill
+            try:
+                os.kill(pid, signal.SIGKILL)
+                time.sleep(0.2)
+            except ProcessLookupError:
+                pass
+
         PID_FILE.unlink(missing_ok=True)
+        HEARTBEAT_FILE.unlink(missing_ok=True)
         return True
     except ProcessLookupError:
         PID_FILE.unlink(missing_ok=True)
+        HEARTBEAT_FILE.unlink(missing_ok=True)
         return True
     except PermissionError:
         return False
@@ -258,6 +319,9 @@ class DiscordBot:
             )
             await self._client.change_presence(activity=activity)
 
+            # Start heartbeat loop (for daemon health checks)
+            self._client.loop.create_task(self._heartbeat_loop())
+
         @self._client.event
         async def on_message(message: Message):
             await self._handle_message(message)
@@ -310,17 +374,14 @@ class DiscordBot:
                 logger.error(f"No agent for channel {effective_channel_id}")
                 return
 
-            # 9. Process with typing indicator
-            try:
-                async with message.channel.typing():
-                    # Run agent.run() in thread pool (it's synchronous)
-                    loop = asyncio.get_event_loop()
-                    response = await loop.run_in_executor(
-                        None, agent.run, text
-                    )
+            # 9. Check streaming preference (per-channel or global)
+            use_streaming = ch_cfg.get("stream", self._discord_cfg.get("stream", False))
 
-                # 10. Send response (chunked if needed)
-                await self._send_response(message.channel, response, reply_to=message)
+            try:
+                if use_streaming:
+                    await self._handle_streaming(message, agent, text)
+                else:
+                    await self._handle_blocking(message, agent, text)
 
             except Exception as e:
                 logger.exception(
@@ -332,6 +393,97 @@ class DiscordBot:
                     )
                 except discord.HTTPException:
                     pass
+
+    async def _handle_blocking(self, message: Message, agent: Agent, text: str):
+        """Standard blocking response — wait for full response, then send."""
+        async with message.channel.typing():
+            loop = asyncio.get_event_loop()
+            response = await loop.run_in_executor(None, agent.run, text)
+
+        await self._send_response(message.channel, response, reply_to=message)
+
+    async def _handle_streaming(self, message: Message, agent: Agent, text: str):
+        """
+        Progressive streaming — edit message as tokens arrive.
+
+        Creates a reply immediately with "..." then edits it every ~1s
+        with accumulated text. Final edit contains the complete response.
+        If the response exceeds Discord's limit, sends additional messages.
+        """
+        import queue as queue_mod
+
+        q = queue_mod.Queue()
+        loop = asyncio.get_event_loop()
+
+        def _stream_worker():
+            try:
+                for chunk in agent.run_stream(text):
+                    q.put(("chunk", chunk))
+                q.put(("done", None))
+            except Exception as e:
+                q.put(("error", str(e)))
+
+        # Start streaming in background thread
+        fut = loop.run_in_executor(None, _stream_worker)
+
+        # Send initial reply
+        try:
+            bot_msg = await message.reply("...", mention_author=False)
+        except discord.HTTPException:
+            bot_msg = await message.channel.send("...")
+
+        accumulated = ""
+        last_edit_time = time.monotonic()
+        edit_interval = 1.0  # Edit at most once per second
+        done = False
+
+        while not done:
+            # Drain the queue
+            try:
+                while True:
+                    msg_type, data = q.get_nowait()
+                    if msg_type == "chunk":
+                        accumulated += data
+                    elif msg_type == "done":
+                        done = True
+                        break
+                    elif msg_type == "error":
+                        accumulated += f"\n\n*Error: {data[:200]}*"
+                        done = True
+                        break
+            except queue_mod.Empty:
+                pass
+
+            # Edit the message if enough time has passed or we're done
+            now = time.monotonic()
+            if accumulated and (done or now - last_edit_time >= edit_interval):
+                display = accumulated[:MAX_MESSAGE_LENGTH]
+                if not done and len(accumulated) <= MAX_MESSAGE_LENGTH:
+                    display += " ..."
+                try:
+                    await bot_msg.edit(content=display)
+                    last_edit_time = now
+                except discord.HTTPException:
+                    pass
+
+            if not done:
+                await asyncio.sleep(0.1)
+
+        # Final: if response exceeded Discord limit, send overflow as new messages
+        if len(accumulated) > MAX_MESSAGE_LENGTH:
+            # Edit first message to show first chunk
+            try:
+                await bot_msg.edit(content=accumulated[:MAX_MESSAGE_LENGTH])
+            except discord.HTTPException:
+                pass
+            # Send remaining chunks
+            remaining = accumulated[MAX_MESSAGE_LENGTH:]
+            overflow_chunks = self._chunk_message(remaining)
+            for chunk in overflow_chunks:
+                try:
+                    await message.channel.send(chunk)
+                except discord.HTTPException:
+                    break
 
     def _resolve_channel_id(self, message: Message) -> int:
         """
@@ -489,6 +641,12 @@ class DiscordBot:
 
         return chunks
 
+    async def _heartbeat_loop(self):
+        """Write heartbeat file every HEARTBEAT_INTERVAL seconds."""
+        while not self._client.is_closed():
+            write_heartbeat()
+            await asyncio.sleep(HEARTBEAT_INTERVAL)
+
     def run(self, foreground: bool = True):
         """
         Start the Discord bot. Blocks until disconnected (Ctrl+C).
@@ -512,13 +670,31 @@ class DiscordBot:
             _log_file.parent.mkdir(parents=True, exist_ok=True)
             setup_logging(to_console=False, to_file=True)
 
+        # Register signal handlers for graceful shutdown
+        def _signal_handler(signum, frame):
+            signame = signal.Signals(signum).name
+            logger.info(f"Received {signame}, shutting down...")
+            # Schedule the close on the event loop
+            if self._client.loop and self._client.loop.is_running():
+                self._client.loop.create_task(self._client.close())
+            else:
+                raise SystemExit(0)
+
+        signal.signal(signal.SIGTERM, _signal_handler)
+        signal.signal(signal.SIGINT, _signal_handler)
+
+        # Write initial heartbeat
+        write_heartbeat()
+
         try:
             self._client.run(token, log_handler=None)
-        except KeyboardInterrupt:
+        except (KeyboardInterrupt, SystemExit):
             if foreground:
                 print("\n  Shutting down...")
         finally:
             PID_FILE.unlink(missing_ok=True)
+            HEARTBEAT_FILE.unlink(missing_ok=True)
+            logger.info("Alfred stopped")
 
     # Daemon mode is handled by cmd_start() in __main__.py using subprocess.Popen.
     # This avoids fork-safety issues with LanceDB.
