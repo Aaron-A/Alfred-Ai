@@ -63,6 +63,9 @@
 
 <!-- ═════════ AGENTS TAB ═════════ -->
 <div class="tab-panel active" id="tab-agents">
+  <div class="tab-toolbar">
+    <button class="new-agent-btn" onclick="openCreateAgentModal()">+ NEW AGENT</button>
+  </div>
   <div class="table-wrap">
     <table class="data-table" id="agentsTable">
       <thead>
@@ -170,6 +173,55 @@
     <div class="modal-actions">
       <button class="modal-btn modal-btn--dismiss" onclick="closeConfigModal()">CANCEL</button>
       <button class="modal-btn modal-btn--save" id="modalSaveBtn" disabled onclick="saveModalConfig()">SAVE</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═════════ CREATE AGENT MODAL ═════════ -->
+<div class="modal-overlay" id="createAgentModal">
+  <div class="modal-box modal-box--wide">
+    <div class="modal-header">
+      <span class="modal-title">Create Agent</span>
+      <button class="modal-close" onclick="closeCreateAgentModal()">&times;</button>
+    </div>
+
+    <div class="modal-field">
+      <label class="modal-label" for="newAgentName">NAME</label>
+      <input type="text" id="newAgentName" class="modal-input"
+             placeholder="my-agent" maxlength="30"
+             oninput="validateCreateForm()" autocomplete="off">
+      <div class="modal-hint" id="nameHint">Lowercase, a-z, 0-9, hyphens only</div>
+    </div>
+
+    <div class="modal-field">
+      <label class="modal-label" for="newAgentDesc">DESCRIPTION</label>
+      <input type="text" id="newAgentDesc" class="modal-input"
+             placeholder="What does this agent do?" maxlength="200"
+             oninput="validateCreateForm()">
+    </div>
+
+    <div class="modal-field-row">
+      <div class="modal-field modal-field--half">
+        <label class="modal-label" for="newAgentProvider">PROVIDER</label>
+        <select id="newAgentProvider" class="modal-select" onchange="onNewAgentProviderChange()"></select>
+      </div>
+      <div class="modal-field modal-field--half">
+        <label class="modal-label" for="newAgentModel">MODEL</label>
+        <select id="newAgentModel" class="modal-select"></select>
+      </div>
+    </div>
+
+    <div class="modal-field">
+      <label class="modal-label" for="newAgentSoul">DESCRIBE THIS AGENT <span class="modal-label-hint">(optional &mdash; generates a rich personality)</span></label>
+      <textarea id="newAgentSoul" class="modal-textarea"
+                placeholder="Describe what this agent should do, its personality, boundaries, operating mode, tools it needs..."
+                maxlength="2000" rows="5"></textarea>
+      <div class="modal-hint">This prompt will be used to LLM-generate a detailed SOUL.md</div>
+    </div>
+
+    <div class="modal-actions">
+      <button class="modal-btn modal-btn--dismiss" onclick="closeCreateAgentModal()">CANCEL</button>
+      <button class="modal-btn modal-btn--save" id="createAgentBtn" disabled onclick="createAgent()">CREATE</button>
     </div>
   </div>
 </div>

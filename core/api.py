@@ -11,6 +11,7 @@ Endpoints:
     POST /v1/memory/search     Search agent memory
     POST /v1/memory/store      Store a new memory
     GET  /v1/agents            List all agents
+    POST /v1/agents            Create a new agent with workspace
     GET  /v1/agents/{name}     Get agent details + session info
     POST /v1/agents/{name}/reset  Reset an agent's session
     GET  /v1/sessions/{agent}  List all saved sessions for an agent
@@ -25,6 +26,7 @@ Endpoints:
 """
 
 import os
+import re
 import json
 import time
 import asyncio
@@ -732,6 +734,192 @@ def create_app() -> FastAPI:
     async def list_providers():
         """Return the curated provider → models registry for UI dropdowns."""
         return {"providers": PROVIDER_MODELS}
+
+    # ─── Create Agent ─────────────────────────────────────
+
+    class AgentCreateRequest(BaseModel):
+        name: str = Field(..., description="Agent name (lowercase, a-z, 0-9, hyphens)")
+        description: str = Field(..., description="Short agent description")
+        provider: Optional[str] = Field(default=None, description="LLM provider")
+        model: Optional[str] = Field(default=None, description="LLM model")
+        soul_prompt: Optional[str] = Field(default=None, description="Freeform prompt to LLM-generate SOUL.md")
+
+    def _validate_agent_name(name: str) -> str:
+        """Validate agent name. Returns error message or empty string."""
+        if not name:
+            return "Agent name is required."
+        if not re.match(r'^[a-z][a-z0-9-]{0,29}$', name):
+            return "Name must be lowercase, start with a letter, only a-z/0-9/hyphens, max 30 chars."
+        return ""
+
+    async def _generate_soul_md(
+        agent_name: str, description: str, soul_prompt: str,
+        creator: str, birthday: str,
+    ) -> str:
+        """Use the primary LLM to generate a rich SOUL.md from the user's prompt."""
+        from .llm import LLMClient
+
+        system = (
+            "You are an expert AI agent architect. Generate a SOUL.md file for a new AI agent.\n\n"
+            "The SOUL.md defines the agent's identity, personality, operating rules, and boundaries.\n"
+            "It is written in Markdown and loaded as the agent's core system prompt.\n\n"
+            "Use this structure (adapt sections based on the agent's purpose):\n\n"
+            "# SOUL.md - Who You Are\n\n"
+            "You are {name}, an AI agent created by {creator}.\n"
+            "Your birthday is {birthday} — the day you were first brought online.\n\n"
+            "_One-line tagline capturing the agent's essence._\n\n"
+            "## Core Truths\n(3-5 bold principles this agent lives by)\n\n"
+            "## Boundaries\n(Hard rules the agent must never break, as a bullet list)\n\n"
+            "## Personality\n(5-7 personality traits as bullet points)\n\n"
+            "## Rules\n(Operational rules — check memory, log decisions, etc.)\n\n"
+            "Key principles:\n"
+            "- Be specific and opinionated, not generic\n"
+            "- Include concrete boundaries with numbers where relevant\n"
+            "- Write in second person (\"You are...\", \"You never...\")\n"
+            "- The tone should match the agent's personality\n"
+            "- Include a tagline in italics after the opening description\n"
+            "- Reference memory tools for continuity\n"
+            "- Do NOT include sections about tools or other agents (those are auto-generated separately)\n"
+            "- Output ONLY the Markdown content, no code fences or explanations"
+        )
+
+        prompt = (
+            f"Create SOUL.md for this agent:\n\n"
+            f"**Name:** {agent_name}\n"
+            f"**Description:** {description}\n"
+            f"**Creator:** {creator}\n"
+            f"**Birthday:** {birthday}\n\n"
+            f"**User's vision for this agent:**\n{soul_prompt}"
+        )
+
+        loop = asyncio.get_event_loop()
+
+        def _call_llm():
+            client = LLMClient()
+            return client.ask(prompt, system=system, max_tokens=2000, temperature=0.7)
+
+        result = await loop.run_in_executor(None, _call_llm)
+
+        # Strip code fences if the LLM wraps the output
+        if result and result.strip().startswith("```"):
+            lines = result.split("\n")
+            lines = [l for l in lines if not l.strip().startswith("```")]
+            result = "\n".join(lines)
+
+        return result
+
+    @app.post("/v1/agents")
+    async def create_agent(req: AgentCreateRequest):
+        """
+        Create a new agent with workspace and optionally LLM-generated SOUL.md.
+
+        If soul_prompt is provided, uses the primary LLM to generate a rich SOUL.md.
+        Otherwise, uses the default template.
+        """
+        # 1. Validate name
+        err = _validate_agent_name(req.name)
+        if err:
+            raise HTTPException(status_code=400, detail=err)
+
+        # 2. Check name doesn't exist
+        cfg = _load_config()
+        if req.name in cfg.get("agents", {}):
+            raise HTTPException(status_code=409, detail=f"Agent '{req.name}' already exists.")
+
+        # 3. Validate provider/model if specified
+        if req.provider:
+            if req.provider not in PROVIDER_MODELS:
+                raise HTTPException(status_code=400, detail=f"Unknown provider '{req.provider}'.")
+            if req.model and req.model not in PROVIDER_MODELS[req.provider]:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Unknown model '{req.model}' for '{req.provider}'."
+                )
+
+        # 4. Resolve creator name from existing config
+        creator = ""
+        for acfg in cfg.get("agents", {}).values():
+            if acfg.get("creator"):
+                creator = acfg["creator"]
+                break
+
+        # 5. Generate SOUL.md if soul_prompt provided
+        birthday = datetime.now().strftime("%B %d, %Y")
+        soul_generated = False
+        custom_soul = None
+
+        if req.soul_prompt and req.soul_prompt.strip():
+            try:
+                custom_soul = await _generate_soul_md(
+                    req.name, req.description, req.soul_prompt,
+                    creator or "its creator", birthday
+                )
+                soul_generated = bool(custom_soul and custom_soul.strip())
+            except Exception as e:
+                logger.error(f"SOUL.md generation failed (falling back to template): {e}")
+
+        # 6. Create workspace
+        from .workspace import create_workspace
+        from .tools import ToolRegistry, register_builtin_tools
+        from .tool_discovery import discover_shared_tools
+
+        workspace_path = str(config.PROJECT_ROOT / "workspaces" / req.name)
+
+        loop = asyncio.get_event_loop()
+
+        def _create_workspace():
+            temp_registry = ToolRegistry()
+            register_builtin_tools(temp_registry)
+            discover_shared_tools(temp_registry)
+            return create_workspace(
+                workspace_path, req.name,
+                registry=temp_registry,
+                creator=creator,
+                birthday=birthday,
+                user_name=creator,
+            )
+
+        created_files = await loop.run_in_executor(None, _create_workspace)
+
+        # 7. Overwrite SOUL.md if LLM-generated content exists
+        if soul_generated and custom_soul:
+            soul_path = Path(workspace_path) / "SOUL.md"
+            soul_path.write_text(custom_soul.strip() + "\n")
+
+        # 8. Save to alfred.json
+        from .config import _save_config
+
+        if "agents" not in cfg:
+            cfg["agents"] = {}
+
+        agent_entry = {
+            "workspace": f"workspaces/{req.name}",
+            "description": req.description,
+            "status": "active",
+            "birthday": datetime.now().strftime("%Y-%m-%d"),
+            "creator": creator,
+        }
+        if req.provider:
+            agent_entry["provider"] = req.provider
+        if req.model:
+            agent_entry["model"] = req.model
+
+        cfg["agents"][req.name] = agent_entry
+        _save_config(cfg)
+
+        logger.info(f"Created agent '{req.name}' (soul_generated={soul_generated})")
+
+        return {
+            "name": req.name,
+            "workspace": f"workspaces/{req.name}",
+            "description": req.description,
+            "status": "active",
+            "files_created": [str(f) for f in created_files],
+            "soul_generated": soul_generated,
+            "restart_required": True,
+        }
+
+    # ─── Agent Config Update ──────────────────────────────
 
     class AgentConfigUpdate(BaseModel):
         provider: Optional[str] = None

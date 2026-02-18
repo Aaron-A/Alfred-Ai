@@ -50,7 +50,13 @@ async function postJSON(path, body = {}) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
-    return await res.json();
+    const data = await res.json();
+    if (!res.ok) {
+      // Attach HTTP status so callers can inspect errors
+      data._status = res.status;
+      data._error = data.detail || data.message || 'Request failed';
+    }
+    return data;
   } catch (e) {
     console.error('POST failed:', path, e);
     return null;
@@ -473,6 +479,151 @@ async function restartDaemon() {
   }
 }
 
+// ─── Create Agent Modal ──────────────────────────
+
+function openCreateAgentModal() {
+  const modal = document.getElementById('createAgentModal');
+
+  // Reset all fields
+  document.getElementById('newAgentName').value = '';
+  document.getElementById('newAgentDesc').value = '';
+  document.getElementById('newAgentSoul').value = '';
+
+  // Reset hints
+  const nameHint = document.getElementById('nameHint');
+  nameHint.textContent = 'Lowercase, a-z, 0-9, hyphens only';
+  nameHint.className = 'modal-hint';
+
+  // Populate provider dropdown
+  const providerSelect = document.getElementById('newAgentProvider');
+  const providers = Object.keys(state.providerModels);
+  if (providers.length) {
+    providerSelect.innerHTML = providers.map(p =>
+      `<option value="${escHtml(p)}">${escHtml(p)}</option>`
+    ).join('');
+    onNewAgentProviderChange();
+  }
+
+  // Reset create button
+  const createBtn = document.getElementById('createAgentBtn');
+  createBtn.textContent = 'CREATE';
+  createBtn.disabled = true;
+  createBtn.className = 'modal-btn modal-btn--save';
+
+  // Remove error styling from inputs
+  document.getElementById('newAgentName').classList.remove('modal-input--error');
+
+  modal.classList.add('active');
+
+  // Focus name field
+  setTimeout(() => document.getElementById('newAgentName').focus(), 100);
+}
+
+function closeCreateAgentModal() {
+  document.getElementById('createAgentModal').classList.remove('active');
+}
+
+function onNewAgentProviderChange() {
+  const provider = document.getElementById('newAgentProvider').value;
+  const modelSelect = document.getElementById('newAgentModel');
+  const models = state.providerModels[provider] || [];
+  modelSelect.innerHTML = models.map(m =>
+    `<option value="${escHtml(m)}">${escHtml(m)}</option>`
+  ).join('');
+}
+
+function validateCreateForm() {
+  const nameInput = document.getElementById('newAgentName');
+  const descInput = document.getElementById('newAgentDesc');
+  const nameHint = document.getElementById('nameHint');
+  const createBtn = document.getElementById('createAgentBtn');
+  const name = nameInput.value.trim();
+  const desc = descInput.value.trim();
+
+  let valid = true;
+
+  // Validate name format
+  if (!name) {
+    nameHint.textContent = 'Lowercase, a-z, 0-9, hyphens only';
+    nameHint.className = 'modal-hint';
+    nameInput.classList.remove('modal-input--error');
+    valid = false;
+  } else if (!/^[a-z][a-z0-9-]{0,29}$/.test(name)) {
+    nameHint.textContent = 'Must start with a letter, only a-z, 0-9, hyphens (max 30)';
+    nameHint.className = 'modal-hint modal-hint--error';
+    nameInput.classList.add('modal-input--error');
+    valid = false;
+  } else {
+    // Check if name already exists
+    const exists = state.agents.some(a => a.name === name);
+    if (exists) {
+      nameHint.textContent = `Agent "${name}" already exists`;
+      nameHint.className = 'modal-hint modal-hint--error';
+      nameInput.classList.add('modal-input--error');
+      valid = false;
+    } else {
+      nameHint.textContent = 'Looks good';
+      nameHint.className = 'modal-hint';
+      nameInput.classList.remove('modal-input--error');
+    }
+  }
+
+  // Description required
+  if (!desc) valid = false;
+
+  // Update button state
+  createBtn.disabled = !valid;
+  createBtn.className = valid
+    ? 'modal-btn modal-btn--save modal-btn--active'
+    : 'modal-btn modal-btn--save';
+}
+
+async function createAgent() {
+  const createBtn = document.getElementById('createAgentBtn');
+  const name = document.getElementById('newAgentName').value.trim();
+  const description = document.getElementById('newAgentDesc').value.trim();
+  const provider = document.getElementById('newAgentProvider').value;
+  const model = document.getElementById('newAgentModel').value;
+  const soulPrompt = document.getElementById('newAgentSoul').value.trim();
+
+  // Disable button and show progress
+  createBtn.disabled = true;
+  createBtn.textContent = soulPrompt ? 'GENERATING...' : 'CREATING...';
+  createBtn.className = 'modal-btn modal-btn--save';
+
+  const body = { name, description, provider, model };
+  if (soulPrompt) body.soul_prompt = soulPrompt;
+
+  const result = await postJSON('/v1/agents', body);
+
+  if (result && !result._error) {
+    createBtn.textContent = 'CREATED';
+    createBtn.className = 'modal-btn modal-btn--save modal-btn--saved';
+
+    // Refresh data and close
+    await refreshData();
+    setTimeout(() => {
+      closeCreateAgentModal();
+      showRestartBanner();
+    }, 800);
+  } else {
+    const errMsg = result?._error || 'Creation failed';
+    createBtn.textContent = 'FAILED';
+    createBtn.className = 'modal-btn modal-btn--save modal-btn--error';
+
+    // Show error in name hint
+    const nameHint = document.getElementById('nameHint');
+    nameHint.textContent = errMsg;
+    nameHint.className = 'modal-hint modal-hint--error';
+
+    setTimeout(() => {
+      createBtn.textContent = 'CREATE';
+      createBtn.className = 'modal-btn modal-btn--save';
+      validateCreateForm();
+    }, 3000);
+  }
+}
+
 // ─── Render: Schedules Table ──────────────────────
 
 function renderSchedulesTable() {
@@ -679,11 +830,18 @@ document.addEventListener('DOMContentLoaded', () => {
     periodSelect.addEventListener('change', () => refreshData());
   }
 
-  // Close modal on backdrop click
-  const modal = document.getElementById('configModal');
-  if (modal) {
-    modal.addEventListener('click', (e) => {
-      if (e.target === modal) closeConfigModal();
+  // Close modals on backdrop click
+  const configModal = document.getElementById('configModal');
+  if (configModal) {
+    configModal.addEventListener('click', (e) => {
+      if (e.target === configModal) closeConfigModal();
+    });
+  }
+
+  const createModal = document.getElementById('createAgentModal');
+  if (createModal) {
+    createModal.addEventListener('click', (e) => {
+      if (e.target === createModal) closeCreateAgentModal();
     });
   }
 });

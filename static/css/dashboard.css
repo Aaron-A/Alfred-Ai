@@ -732,6 +732,137 @@ body {
 }
 
 /* ═══════════════════════════════════════
+   TAB TOOLBAR (above agents table)
+   ═══════════════════════════════════════ */
+
+.tab-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: 12px;
+}
+
+.new-agent-btn {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  padding: 7px 16px;
+  border-radius: 3px;
+  border: 1px solid var(--cyan);
+  background: rgba(6, 182, 212, 0.1);
+  color: var(--cyan);
+  cursor: pointer;
+  transition: var(--transition);
+  white-space: nowrap;
+}
+
+.new-agent-btn:hover {
+  background: rgba(6, 182, 212, 0.2);
+  box-shadow: 0 0 12px rgba(6, 182, 212, 0.15);
+}
+
+/* ═══════════════════════════════════════
+   CREATE AGENT MODAL (wide variant)
+   ═══════════════════════════════════════ */
+
+.modal-box--wide {
+  max-width: 520px;
+}
+
+.modal-input {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  width: 100%;
+  transition: var(--transition);
+  outline: none;
+}
+
+.modal-input:hover {
+  border-color: #444;
+}
+
+.modal-input:focus {
+  border-color: var(--cyan);
+  box-shadow: 0 0 0 1px rgba(6, 182, 212, 0.2);
+}
+
+.modal-input::placeholder {
+  color: var(--text-dim);
+  font-weight: 400;
+}
+
+.modal-input--error {
+  border-color: var(--red) !important;
+  box-shadow: 0 0 0 1px rgba(239, 68, 68, 0.2) !important;
+}
+
+.modal-textarea {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  width: 100%;
+  min-height: 80px;
+  max-height: 200px;
+  resize: vertical;
+  transition: var(--transition);
+  outline: none;
+  line-height: 1.5;
+}
+
+.modal-textarea:hover {
+  border-color: #444;
+}
+
+.modal-textarea:focus {
+  border-color: var(--cyan);
+  box-shadow: 0 0 0 1px rgba(6, 182, 212, 0.2);
+}
+
+.modal-textarea::placeholder {
+  color: var(--text-dim);
+}
+
+.modal-hint {
+  font-size: 9px;
+  color: var(--text-dim);
+  margin-top: 4px;
+  letter-spacing: 0.3px;
+}
+
+.modal-hint--error {
+  color: var(--red);
+}
+
+.modal-label-hint {
+  font-weight: 400;
+  color: var(--text-dim);
+  letter-spacing: 0;
+  font-size: 9px;
+}
+
+.modal-field-row {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.modal-field--half {
+  flex: 1;
+  margin-bottom: 0;
+}
+
+/* ═══════════════════════════════════════
    UTILITY
    ═══════════════════════════════════════ */
 
