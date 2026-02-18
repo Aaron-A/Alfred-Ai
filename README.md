@@ -9,7 +9,7 @@ Alfred is a lightweight framework for building persistent AI agents. Each agent 
 - **Vector memory** — automatic context recall powered by LanceDB + hybrid search
 - **Tools** — builtin, shared, and per-agent toolkits with auto-discovery
 - **A workspace** — persistent files that define the agent's identity, knowledge, and state
-- **Multi-provider LLM support** — Anthropic, xAI, and more with automatic fallback
+- **Multi-provider LLM support** — Anthropic, xAI, OpenAI, and Ollama (local) with automatic fallback
 - **Multi-agent delegation** — agents can delegate tasks and message each other
 - **Session persistence** — conversation history survives restarts
 - **HTTP API** — REST endpoints for integration with scripts, apps, and UIs
@@ -159,7 +159,7 @@ Four entry points (CLI, Discord, REST API, Scheduler) feed into the Agent Framew
                      │  Alpaca API    (paper trading)           │
                      │  X/Twitter API (OAuth 1.0a)             │
                      │  Brave Search  (web results)            │
-                     │  LLM Providers (Anthropic · xAI · OpenAI)│
+                     │  LLM Providers (Anthropic · xAI · OpenAI · Ollama)│
                      └─────────────────────────────────────────┘
 ```
 
@@ -376,10 +376,40 @@ alfred provider add brave
 
 Or set the `BRAVE_API_KEY` environment variable. Get a free key at [brave.com/search/api](https://brave.com/search/api/).
 
+## Local Models (Ollama)
+
+Alfred auto-detects [Ollama](https://ollama.com) during setup. No API key needed — just have Ollama running:
+
+```bash
+# Install Ollama (https://ollama.com)
+ollama serve
+ollama pull llama3.1
+
+# Alfred detects it automatically
+alfred setup                    # Auto-detects running instance + models
+alfred provider add ollama      # Or add manually later
+alfred models update ollama     # Refresh available models
+alfred status                   # Shows Ollama status + model count
+```
+
+Any agent can use a local model — set the provider per-agent in `alfred.json`:
+
+```json
+"agents": {
+  "my-agent": {
+    "provider": "ollama",
+    "model": "llama3.1"
+  }
+}
+```
+
+Ollama runs on `localhost:11434` using OpenAI-compatible APIs. Supported models include Llama, DeepSeek, Qwen, Mistral, Gemma, and anything Ollama supports.
+
 ## Requirements
 
 - Python 3.10+
-- An API key from a supported LLM provider (Anthropic, xAI)
+- An API key from a supported LLM provider (Anthropic, xAI, OpenAI)
+- (Optional) [Ollama](https://ollama.com) for local model support
 - (Optional) Brave Search API key for web search
 
 ## License
