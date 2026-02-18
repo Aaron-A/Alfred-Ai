@@ -49,6 +49,18 @@ class MemoryStore:
         """Generate table name from memory type."""
         return f"{config.MEMORY_TABLE_PREFIX}{memory_type}"
 
+    def _list_table_names(self) -> list[str]:
+        """Get table names, handling both old (list) and new (response object) LanceDB APIs."""
+        result = self.db.list_tables()
+        # LanceDB < 0.29: returns list[str] directly
+        if isinstance(result, list):
+            return result
+        # LanceDB >= 0.29: returns ListTablesResponse with .tables attribute
+        if hasattr(result, "tables"):
+            return result.tables
+        # Fallback: try to coerce
+        return list(result)
+
     def _get_or_create_table(self, data: list[dict]) -> lancedb.table.Table:
         """Get existing table or create one from data."""
         # Infer memory_type from the first record
@@ -58,7 +70,7 @@ class MemoryStore:
         if table_name in self._tables:
             return self._tables[table_name], False
 
-        existing_tables = self.db.list_tables()
+        existing_tables = self._list_table_names()
 
         if table_name in existing_tables:
             table = self.db.open_table(table_name)
@@ -131,7 +143,7 @@ class MemoryStore:
         table_name = self._table_name(record.memory_type)
 
         try:
-            if table_name not in self.db.list_tables():
+            if table_name not in self._list_table_names():
                 return None
 
             table = self.db.open_table(table_name)
@@ -271,7 +283,7 @@ class MemoryStore:
         else:
             # Search all memory tables
             table_names = [
-                t for t in self.db.list_tables()
+                t for t in self._list_table_names()
                 if t.startswith(config.MEMORY_TABLE_PREFIX)
             ]
 
@@ -440,7 +452,7 @@ class MemoryStore:
     def list_tables(self) -> list[str]:
         """List all memory tables."""
         return [
-            t for t in self.db.list_tables()
+            t for t in self._list_table_names()
             if t.startswith(config.MEMORY_TABLE_PREFIX)
         ]
 
