@@ -6,7 +6,7 @@ A memory-first agent framework in Python. Create AI agents that remember, learn,
 
 Alfred is a lightweight framework for building persistent AI agents. Each agent has:
 
-- **Vector memory** — automatic context recall powered by LanceDB + hybrid search
+- **Vector memory** — automatic context recall powered by LanceDB + hybrid search, temporal decay, and deduplication
 - **Tools** — builtin, shared, and per-agent toolkits with auto-discovery
 - **A workspace** — persistent files that define the agent's identity, knowledge, and state
 - **Multi-provider LLM support** — Anthropic, xAI, OpenAI, and Ollama (local) with automatic fallback
@@ -222,7 +222,11 @@ alfred-ai/
 - `AGENTS.md` — awareness of other agents
 - `TOOLS.md` — tool documentation and usage notes
 
-**Memory** is automatic and isolated per agent. When an agent receives a message, it searches its own vector store for relevant past context and injects it into the prompt. Hybrid search combines vector similarity (0.7 weight) with text matching (0.3 weight). Agents with `memory_shared: true` also get a `memory_search_global` tool to search across all agents.
+**Memory** is automatic and isolated per agent. When an agent receives a message, it searches its own vector store for relevant past context and injects it into the prompt. Hybrid search combines vector similarity (0.7 weight) with text matching (0.3 weight). Agents with `memory_shared: true` also get a `memory_search_global` tool to search across all agents. Three additional memory features keep the system sharp over time:
+
+- **Temporal decay** — recent memories get a recency bonus during search. A 30-day exponential half-life blends 80% semantic similarity with 20% recency, so today's trade log ranks above last month's without losing old context entirely.
+- **Deduplication** — before storing a new memory, a similarity check runs against existing records. If a near-identical memory (≥ 95% similar) already exists and is less than 24 hours old, it updates the existing record instead of creating a duplicate.
+- **Pre-compaction flush** — when the session window fills up and old messages are about to be trimmed, the agent makes a lightweight LLM call to summarize the expiring context and stores it in vector memory. This prevents context amnesia during long tool-heavy sessions (e.g., a trading agent running 30+ API calls across a schedule run).
 
 **Tools** use a layered discovery system:
 1. **Builtin** — memory read/write, shell commands, delegation, messaging
@@ -238,7 +242,7 @@ alfred-ai/
 
 **Multi-agent delegation** lets agents hand tasks to each other. `delegate_to` runs a task synchronously on another agent and returns the result. `send_message` queues async messages to another agent's inbox. Agents see unread inbox notifications in their system prompt.
 
-**Session persistence** saves conversation history to disk after every interaction. On restart, agents resume where they left off. A sliding window keeps the last 50 turns (configurable), trimming oldest messages first. Discord channels, API callers, and CLI each get separate sessions. Use `alfred agent chat alfred --session research` for named sessions, `alfred session list` to see all saved conversations, `alfred session view alfred cli` to review history, and `alfred session export alfred cli --output chat.md` to export.
+**Session persistence** saves conversation history to disk after every interaction. On restart, agents resume where they left off. A sliding window keeps the last 50 turns (configurable), trimming oldest messages first — with pre-compaction flush preserving important context before anything is dropped. Discord channels, API callers, and CLI each get separate sessions. Use `alfred agent chat alfred --session research` for named sessions, `alfred session list` to see all saved conversations, `alfred session view alfred cli` to review history, and `alfred session export alfred cli --output chat.md` to export.
 
 **Streaming** is supported across all providers. The API offers an SSE endpoint (`/v1/chat/stream`) for real-time token streaming. Discord supports optional progressive message editing — set `"stream": true` in discord config or per-channel to see responses appear as they're generated.
 

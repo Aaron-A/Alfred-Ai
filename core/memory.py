@@ -7,6 +7,7 @@ shared memory layer. Memories are embedded locally, stored in LanceDB,
 and retrievable via semantic search + metadata filtering.
 """
 
+import math
 import time
 from datetime import datetime, timezone
 from typing import Optional, Type
@@ -57,7 +58,7 @@ class MemoryStore:
         if table_name in self._tables:
             return self._tables[table_name], False
 
-        existing_tables = self.db.table_names()
+        existing_tables = self.db.list_tables()
 
         if table_name in existing_tables:
             table = self.db.open_table(table_name)
@@ -70,15 +71,21 @@ class MemoryStore:
             self._tables[table_name] = table
             return table, True  # True = data was already inserted via create
 
-    def store(self, record: MemoryRecord) -> str:
+    def store(self, record: MemoryRecord, dedup: bool = True) -> str:
         """
-        Store a memory record with automatic embedding.
+        Store a memory record with automatic embedding and optional deduplication.
+
+        Before storing, checks if a near-identical memory exists (>= 95% similarity
+        AND less than 24 hours old). If found, updates the existing record instead
+        of creating a duplicate. This prevents the same hourly scan from filling
+        memory with near-identical entries.
 
         Args:
             record: Any MemoryRecord subclass (TradeMemory, TweetMemory, etc.)
+            dedup: If True, check for near-duplicates before storing (default True)
 
         Returns:
-            The record ID
+            The record ID (existing ID if deduped, new ID otherwise)
         """
         # Set agent_id if not already set
         if not record.agent_id:
@@ -87,6 +94,19 @@ class MemoryStore:
         # Generate embedding from the rich text representation
         embed_text = record.to_embed_text()
         vector = self.embedder.embed_documents([embed_text])[0]
+
+        # ─── Deduplication Check ─────────────────────────────────
+        if dedup:
+            existing_id = self._check_duplicate(record, vector)
+            if existing_id:
+                # Update the existing record's content and timestamp
+                self.update(existing_id, record.memory_type, {
+                    "content": record.content,
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                    "tags": record.tags or "",
+                })
+                logger.debug(f"Dedup: updated existing memory {existing_id} instead of creating new")
+                return existing_id
 
         # Convert to dict and add vector
         data = record.to_dict()
@@ -100,6 +120,60 @@ class MemoryStore:
             table.add([data])
 
         return record.id
+
+    def _check_duplicate(self, record: MemoryRecord, vector: list[float]) -> Optional[str]:
+        """
+        Check if a near-duplicate memory exists.
+
+        Returns the existing record's ID if found (>= 95% similar AND < 24h old),
+        or None if no duplicate exists.
+        """
+        table_name = self._table_name(record.memory_type)
+
+        try:
+            if table_name not in self.db.list_tables():
+                return None
+
+            table = self.db.open_table(table_name)
+
+            # Search for similar records from the same agent
+            where = f"agent_id = '{record.agent_id}'"
+            results = table.search(vector).where(where).limit(1).to_list()
+
+            if not results:
+                return None
+
+            top = results[0]
+            distance = top.get("_distance", 1.0)
+            similarity = 1.0 - distance
+
+            # Must be >= 95% similar
+            if similarity < 0.95:
+                return None
+
+            # Must be less than 24 hours old
+            created_at_str = top.get("created_at", "")
+            if not created_at_str:
+                return None
+
+            try:
+                if created_at_str.endswith("Z"):
+                    created_at_str = created_at_str[:-1] + "+00:00"
+                created_at = datetime.fromisoformat(created_at_str)
+                if created_at.tzinfo is None:
+                    created_at = created_at.replace(tzinfo=timezone.utc)
+            except (ValueError, TypeError):
+                return None
+
+            age_seconds = (datetime.now(timezone.utc) - created_at).total_seconds()
+            if age_seconds > 86400:  # Older than 24h — not a dup, it's historical
+                return None
+
+            return top.get("id")
+
+        except Exception as e:
+            logger.debug(f"Dedup check failed (non-fatal): {e}")
+            return None
 
     def store_many(self, records: list[MemoryRecord]) -> list[str]:
         """Store multiple records efficiently with batch embedding."""
@@ -197,7 +271,7 @@ class MemoryStore:
         else:
             # Search all memory tables
             table_names = [
-                t for t in self.db.table_names()
+                t for t in self.db.list_tables()
                 if t.startswith(config.MEMORY_TABLE_PREFIX)
             ]
 
@@ -238,9 +312,75 @@ class MemoryStore:
             except Exception as e:
                 logger.warning(f"Search failed on {table_name}: {e}")
 
-        # Sort by distance (lower = more similar) and trim to top_k
+        # Apply temporal decay if we have timestamps
+        results = self._apply_temporal_decay(results)
+
+        # Sort by combined score (lower = better) and trim to top_k
         results.sort(key=lambda x: x.get("_distance", float("inf")))
         return results[:top_k]
+
+    def _apply_temporal_decay(
+        self,
+        results: list[dict],
+        half_life_days: float = 30.0,
+        recency_weight: float = 0.2,
+    ) -> list[dict]:
+        """
+        Apply time-based decay to search results so recent memories rank higher.
+
+        Blends vector similarity with a recency score using exponential decay.
+        Old memories aren't penalized harshly — they just lose a small recency
+        bonus. A 90-day-old memory with perfect semantic match still ranks well.
+
+        Args:
+            results: Raw search results with _distance and created_at fields
+            half_life_days: Days until recency bonus drops to 50% (default 30)
+            recency_weight: How much recency matters vs similarity (0.0-1.0, default 0.2)
+
+        The math:
+            similarity = 1.0 - _distance  (0 to 1, higher = more similar)
+            recency = exp(-0.693 * age_days / half_life)  (1.0 for today, 0.5 at half-life)
+            combined = (1 - weight) * similarity + weight * recency
+            _distance = 1.0 - combined  (back to distance format, lower = better)
+        """
+        if not results or recency_weight <= 0:
+            return results
+
+        now = datetime.now(timezone.utc)
+        decay_rate = 0.693147 / max(half_life_days, 1)  # ln(2) / half_life
+
+        for r in results:
+            # Parse created_at timestamp
+            created_at_str = r.get("created_at", "")
+            if not created_at_str:
+                continue  # No timestamp — leave distance as-is
+
+            try:
+                # Handle both formats: with and without timezone
+                if created_at_str.endswith("Z"):
+                    created_at_str = created_at_str[:-1] + "+00:00"
+                created_at = datetime.fromisoformat(created_at_str)
+                if created_at.tzinfo is None:
+                    created_at = created_at.replace(tzinfo=timezone.utc)
+            except (ValueError, TypeError):
+                continue  # Unparseable — skip
+
+            age_days = max(0, (now - created_at).total_seconds() / 86400)
+
+            # Exponential decay: 1.0 at age=0, 0.5 at half_life, ~0 at 5x half_life
+            recency = math.exp(-decay_rate * age_days)
+
+            # Blend similarity with recency
+            raw_distance = r.get("_distance", 0.5)
+            similarity = max(0, 1.0 - raw_distance)
+            combined = (1.0 - recency_weight) * similarity + recency_weight * recency
+
+            # Store back as distance (lower = better)
+            r["_distance"] = 1.0 - combined
+            r["_recency"] = recency
+            r["_age_days"] = round(age_days, 1)
+
+        return results
 
     def get(self, record_id: str, memory_type: str) -> Optional[dict]:
         """Get a specific record by ID."""
@@ -300,7 +440,7 @@ class MemoryStore:
     def list_tables(self) -> list[str]:
         """List all memory tables."""
         return [
-            t for t in self.db.table_names()
+            t for t in self.db.list_tables()
             if t.startswith(config.MEMORY_TABLE_PREFIX)
         ]
 

@@ -64,6 +64,9 @@ class AgentConfig:
     session_max_turns: int = 50  # Max conversation turns to keep (oldest trimmed first)
     session_max_tokens: int = 80000  # Approx token budget for history (rough: 4 chars ≈ 1 token)
 
+    # Pre-compaction flush — save expiring context to memory before trimming
+    pre_compaction_flush: bool = True  # LLM summarizes expiring messages before they're dropped
+
     @classmethod
     def from_dict(cls, data: dict) -> "AgentConfig":
         return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
@@ -417,27 +420,169 @@ class Agent:
         1. Hard cap on turn count (session_max_turns × 2 messages)
         2. Token budget — estimate token usage, trim oldest turns first
         3. Always trim in pairs (user + assistant) to keep history coherent
+        4. PRE-COMPACTION FLUSH: Before dropping messages, summarize and store
+           them in vector memory so important context isn't lost.
 
-        Old messages aren't lost — they were already stored in vector memory
-        during the original interaction. The agent can recall them via
-        memory_search if needed.
+        The flush prevents context amnesia during long sessions. When the trader
+        runs 30+ tool calls analyzing BTC, the early analysis gets preserved
+        in memory before it falls off the context window.
         """
         max_messages = self.config.session_max_turns * 2
         max_chars = self.config.session_max_tokens * 4  # Rough: 1 token ≈ 4 chars
 
+        # Collect messages that will be dropped
+        messages_to_drop = []
+
         # 1. Trim by turn count
         if len(messages) > max_messages:
+            messages_to_drop.extend(messages[:-max_messages])
             messages = messages[-max_messages:]
 
         # 2. Trim by estimated token budget
         total_chars = sum(len(m.get("content", "")) for m in messages)
         while total_chars > max_chars and len(messages) > 2:
-            # Remove oldest pair (user + assistant)
+            # Collect the pair being dropped
+            messages_to_drop.extend(messages[:2])
             removed_chars = len(messages[0].get("content", "")) + len(messages[1].get("content", ""))
             messages = messages[2:]
             total_chars -= removed_chars
 
+        # 3. Pre-compaction flush — save expiring context to memory
+        if messages_to_drop and self.memory and self.config.pre_compaction_flush:
+            self._flush_expiring_context(messages_to_drop)
+
         return messages
+
+    # ─── Pre-Compaction Flush ─────────────────────────────────
+
+    # Compact system prompt for the flush summarizer — kept minimal to save tokens
+    _FLUSH_SYSTEM_PROMPT = (
+        "You are a context preservation assistant. You will receive conversation messages "
+        "that are about to be removed from an AI agent's context window. "
+        "Extract and summarize ONLY the important information that should be remembered:\n"
+        "- Decisions made and their reasoning\n"
+        "- Trade entries, exits, stops, targets, and P&L\n"
+        "- Key analysis results (indicator values, support/resistance levels)\n"
+        "- Position updates and risk management actions\n"
+        "- Errors encountered and lessons learned\n"
+        "- Any commitments or plans stated\n\n"
+        "Be concise. Use bullet points. Skip pleasantries, tool call noise, and "
+        "repetitive data fetches. Only preserve what the agent would need to recall later.\n"
+        "If there is nothing important to preserve, respond with exactly: NOTHING_TO_FLUSH"
+    )
+
+    def _flush_expiring_context(self, expiring_messages: list[dict]):
+        """
+        Summarize expiring messages and store the summary in vector memory.
+
+        Makes a lightweight LLM call with just the expiring messages and a fixed
+        summarization prompt. No tools, no memory search — just extract and store.
+
+        This runs synchronously during trim, adding ~1-3 seconds per flush event.
+        Flushes happen rarely (every ~50 turns or when token budget is exceeded).
+        """
+        try:
+            # Build a compact text representation of expiring messages
+            lines = []
+            for msg in expiring_messages:
+                role = msg.get("role", "?")
+                content = msg.get("content", "")
+                if not content:
+                    continue
+                # Truncate very long messages (tool results can be huge)
+                if len(content) > 1000:
+                    content = content[:1000] + "... [truncated]"
+                lines.append(f"[{role}]: {content}")
+
+            if not lines:
+                return
+
+            expiring_text = "\n".join(lines)
+
+            # Cap the total flush input to avoid expensive calls on massive sessions
+            if len(expiring_text) > 8000:
+                expiring_text = expiring_text[:8000] + "\n... [truncated — too many messages]"
+
+            # Make a lightweight LLM call — no tools, just summarize
+            if self.llm.provider == "anthropic":
+                summary = self._flush_anthropic(expiring_text)
+            else:
+                summary = self._flush_openai(expiring_text)
+
+            # If the LLM says nothing worth keeping, skip storage
+            if not summary or "NOTHING_TO_FLUSH" in summary:
+                logger.debug(f"{self.config.name}: flush found nothing worth preserving")
+                return
+
+            # Store the summary in memory
+            from models.base import MemoryRecord
+            record = MemoryRecord(
+                content=summary,
+                memory_type="context_flush",
+                tags="auto,pre-compaction,session-context",
+                agent_id=self.config.name,
+                source="pre_compaction_flush",
+            )
+            self.memory.store(record, dedup=False)  # Never dedup flushes — each is unique
+
+            msg_count = len(expiring_messages)
+            logger.info(f"{self.config.name}: flushed {msg_count} expiring messages to memory")
+
+        except Exception as e:
+            # Flush is best-effort — never crash the agent over it
+            logger.warning(f"{self.config.name}: pre-compaction flush failed (non-fatal): {e}")
+
+    def _flush_anthropic(self, expiring_text: str) -> str:
+        """Flush via Anthropic API — minimal call, no tools."""
+        try:
+            response = self.llm.anthropic_client.messages.create(
+                model=self.llm.model,
+                max_tokens=1024,
+                temperature=0.3,  # Low temp for factual summarization
+                system=self._FLUSH_SYSTEM_PROMPT,
+                messages=[{
+                    "role": "user",
+                    "content": f"Summarize the important context from these expiring messages:\n\n{expiring_text}",
+                }],
+            )
+            text_parts = [b.text for b in response.content if hasattr(b, "text")]
+            return "\n".join(text_parts).strip()
+        except Exception as e:
+            logger.warning(f"Flush LLM call failed: {e}")
+            return ""
+
+    def _flush_openai(self, expiring_text: str) -> str:
+        """Flush via OpenAI-compatible API — minimal call, no tools."""
+        import urllib.request
+        import urllib.error
+
+        url = f"{self.llm.base_url}/v1/chat/completions"
+        payload = {
+            "model": self.llm.model,
+            "max_tokens": 1024,
+            "temperature": 0.3,
+            "messages": [
+                {"role": "system", "content": self._FLUSH_SYSTEM_PROMPT},
+                {"role": "user", "content": f"Summarize the important context from these expiring messages:\n\n{expiring_text}"},
+            ],
+        }
+
+        headers = {
+            "Content-Type": "application/json",
+            "User-Agent": "Alfred-AI/1.0",
+        }
+        if self.llm.api_key and self.llm.provider != "ollama":
+            headers["Authorization"] = f"Bearer {self.llm.api_key}"
+
+        try:
+            data = json.dumps(payload).encode("utf-8")
+            req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                result = json.loads(resp.read().decode("utf-8"))
+            return result["choices"][0]["message"].get("content", "").strip()
+        except Exception as e:
+            logger.warning(f"Flush LLM call failed: {e}")
+            return ""
 
     def _init_llm(self) -> LLMClient:
         """Initialize LLM client with agent-specific or global settings."""
