@@ -355,6 +355,11 @@ def create_app() -> FastAPI:
     async def list_agents():
         cfg = _load_config()
         agents = cfg.get("agents", {})
+        # Resolve global defaults for agents without per-agent overrides
+        global_provider = cfg.get("llm", {}).get("primary", {}).get("provider",
+                          cfg.get("llm", {}).get("provider", "anthropic"))
+        global_model = cfg.get("llm", {}).get("primary", {}).get("model",
+                       cfg.get("llm", {}).get("model", ""))
         result = []
         for name, acfg in agents.items():
             result.append({
@@ -362,6 +367,8 @@ def create_app() -> FastAPI:
                 "description": acfg.get("description", ""),
                 "status": acfg.get("status", "active"),
                 "workspace": acfg.get("workspace", ""),
+                "provider": acfg.get("provider", global_provider),
+                "model": acfg.get("model", global_model),
             })
         return {"agents": result}
 
@@ -684,6 +691,154 @@ def create_app() -> FastAPI:
                 "elapsed_ms": elapsed,
             }
         except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+    # ─── Agent Config ─────────────────────────────────────
+
+    # Curated provider → models registry.
+    # Update these lists as new providers/models become available.
+    PROVIDER_MODELS = {
+        "anthropic": [
+            "claude-sonnet-4-6",
+            "claude-sonnet-4-5-20250929",
+            "claude-opus-4-0-20250918",
+            "claude-haiku-3-5-20241022",
+        ],
+        "xai": [
+            "grok-4-1-fast-reasoning",
+            "grok-4-1-fast",
+            "grok-3-fast",
+            "grok-3-mini-fast",
+        ],
+        "openai": [
+            "gpt-5.2",
+            "gpt-4.1",
+            "gpt-4.1-mini",
+            "gpt-4.1-nano",
+            "o3",
+            "o4-mini",
+        ],
+        "ollama": [
+            "llama3.1",
+            "llama3.2",
+            "mistral",
+            "codellama",
+            "deepseek-r1",
+            "qwen2.5",
+        ],
+    }
+
+    @app.get("/v1/providers")
+    async def list_providers():
+        """Return the curated provider → models registry for UI dropdowns."""
+        return {"providers": PROVIDER_MODELS}
+
+    class AgentConfigUpdate(BaseModel):
+        provider: Optional[str] = None
+        model: Optional[str] = None
+
+    @app.patch("/v1/agents/{name}/config")
+    async def update_agent_config(name: str, update: AgentConfigUpdate):
+        """
+        Update an agent's provider/model in alfred.json.
+
+        Only accepts known providers and their known models.
+        """
+        from .config import _save_config
+
+        cfg = _load_config()
+        agents_cfg = cfg.get("agents", {})
+
+        if name not in agents_cfg:
+            raise HTTPException(status_code=404, detail=f"Agent '{name}' not found.")
+
+        # Validate provider
+        if update.provider and update.provider not in PROVIDER_MODELS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unknown provider '{update.provider}'. Known: {list(PROVIDER_MODELS.keys())}"
+            )
+
+        # Validate model belongs to provider
+        if update.model and update.provider:
+            known_models = PROVIDER_MODELS.get(update.provider, [])
+            if update.model not in known_models:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Unknown model '{update.model}' for provider '{update.provider}'. Known: {known_models}"
+                )
+
+        # Apply updates
+        if update.provider:
+            agents_cfg[name]["provider"] = update.provider
+        if update.model:
+            agents_cfg[name]["model"] = update.model
+
+        cfg["agents"] = agents_cfg
+        _save_config(cfg)
+
+        logger.info(f"Updated agent '{name}' config: provider={update.provider}, model={update.model}")
+
+        return {
+            "message": f"Agent '{name}' config updated",
+            "provider": agents_cfg[name].get("provider"),
+            "model": agents_cfg[name].get("model"),
+            "restart_required": True,
+        }
+
+    @app.post("/v1/admin/reload")
+    async def reload_daemon():
+        """
+        Restart the daemon process to pick up config changes.
+
+        Sends SIGHUP to the daemon process if running, which triggers
+        a graceful restart. If no daemon is running, returns a message
+        telling the user to start it manually.
+        """
+        import signal
+
+        pid_file = config.DATA_DIR / "daemon.pid"
+
+        if not pid_file.exists():
+            return {"status": "no_daemon", "message": "No daemon PID file found. Start with: alfred daemon start"}
+
+        try:
+            pid = int(pid_file.read_text().strip())
+            # Check if process exists
+            os.kill(pid, 0)
+        except (ValueError, ProcessLookupError, PermissionError):
+            # PID file is stale
+            pid_file.unlink(missing_ok=True)
+            return {"status": "stale_pid", "message": "Daemon PID is stale. Restart manually: alfred daemon start"}
+
+        try:
+            # Send SIGTERM to trigger graceful shutdown, then caller can restart
+            os.kill(pid, signal.SIGTERM)
+            logger.info(f"Sent SIGTERM to daemon PID {pid}")
+
+            # Wait briefly for process to die
+            for _ in range(10):
+                await asyncio.sleep(0.3)
+                try:
+                    os.kill(pid, 0)
+                except ProcessLookupError:
+                    pid_file.unlink(missing_ok=True)
+                    # Now restart the daemon
+                    import subprocess
+                    subprocess.Popen(
+                        ["python", "-m", "cli.main", "daemon", "start"],
+                        cwd=str(config.PROJECT_ROOT),
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        start_new_session=True,
+                    )
+                    logger.info("Daemon restart initiated")
+                    return {"status": "restarted", "message": "Daemon restarted successfully"}
+
+            return {"status": "timeout", "message": f"Daemon PID {pid} did not stop in time. Kill manually."}
+
+        except Exception as e:
+            logger.error(f"Reload failed: {e}")
             raise HTTPException(status_code=500, detail=str(e))
 
     # ─── Static Files (mount last so it doesn't shadow API routes) ───

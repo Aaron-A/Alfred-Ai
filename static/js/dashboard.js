@@ -13,6 +13,8 @@ let state = {
   agents: [],
   metrics: null,
   schedules: {},  // agent_name -> [schedule, ...]
+  providerModels: {},  // provider -> [model, ...]
+  pendingChanges: {},  // agent_name -> {provider, model}
 };
 
 // ─── API Helpers ──────────────────────────────────
@@ -28,6 +30,34 @@ async function fetchJSON(path) {
   }
 }
 
+async function patchJSON(path, body) {
+  try {
+    const res = await fetch(API + path, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    return await res.json();
+  } catch (e) {
+    console.error('PATCH failed:', path, e);
+    return null;
+  }
+}
+
+async function postJSON(path, body = {}) {
+  try {
+    const res = await fetch(API + path, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    return await res.json();
+  } catch (e) {
+    console.error('POST failed:', path, e);
+    return null;
+  }
+}
+
 // ─── Data Fetching ────────────────────────────────
 
 async function refreshData() {
@@ -35,15 +65,21 @@ async function refreshData() {
   const period = document.getElementById('metricsPeriod')?.value || 'session';
   const metricsUrl = '/v1/metrics' + (period !== 'session' ? '?period=' + period : '');
 
-  const [status, agentsData, metricsData] = await Promise.all([
+  const [status, agentsData, metricsData, providersData] = await Promise.all([
     fetchJSON('/v1/status'),
     fetchJSON('/v1/agents'),
     fetchJSON(metricsUrl),
+    Object.keys(state.providerModels).length ? null : fetchJSON('/v1/providers'),
   ]);
 
   state.status = status;
   state.agents = agentsData?.agents || [];
   state.metrics = metricsData;
+
+  // Only set providers once (they don't change at runtime)
+  if (providersData?.providers) {
+    state.providerModels = providersData.providers;
+  }
 
   // Fetch schedules for each agent
   const schedPromises = state.agents.map(a =>
@@ -213,13 +249,200 @@ function renderStats() {
 
 // ─── Render: Agents Table ─────────────────────────
 
+function buildProviderOptions(currentProvider) {
+  const providers = Object.keys(state.providerModels);
+  return providers.map(p =>
+    `<option value="${escHtml(p)}"${p === currentProvider ? ' selected' : ''}>${escHtml(p)}</option>`
+  ).join('');
+}
+
+function buildModelOptions(provider, currentModel) {
+  const models = state.providerModels[provider] || [];
+  return models.map(m =>
+    `<option value="${escHtml(m)}"${m === currentModel ? ' selected' : ''}>${escHtml(m)}</option>`
+  ).join('');
+}
+
+function onProviderChange(agentName, selectEl) {
+  const newProvider = selectEl.value;
+  const agent = state.agents.find(a => a.name === agentName);
+  if (!agent) return;
+
+  // Get current effective values
+  const currentProvider = state.pendingChanges[agentName]?.provider || agent.provider;
+  const currentModel = state.pendingChanges[agentName]?.model || agent.model;
+
+  // When provider changes, auto-select the first model for that provider
+  const models = state.providerModels[newProvider] || [];
+  const newModel = models[0] || '';
+
+  // Update the model dropdown
+  const modelSelect = document.getElementById(`model-${agentName}`);
+  if (modelSelect) {
+    modelSelect.innerHTML = buildModelOptions(newProvider, newModel);
+  }
+
+  // Track pending change
+  const origProvider = agent.provider;
+  const origModel = agent.model;
+
+  if (newProvider !== origProvider || newModel !== origModel) {
+    state.pendingChanges[agentName] = { provider: newProvider, model: newModel };
+  } else {
+    delete state.pendingChanges[agentName];
+  }
+
+  updateConfigButtons(agentName);
+}
+
+function onModelChange(agentName, selectEl) {
+  const newModel = selectEl.value;
+  const agent = state.agents.find(a => a.name === agentName);
+  if (!agent) return;
+
+  const providerSelect = document.getElementById(`provider-${agentName}`);
+  const currentProvider = providerSelect ? providerSelect.value : agent.provider;
+  const origProvider = agent.provider;
+  const origModel = agent.model;
+
+  if (currentProvider !== origProvider || newModel !== origModel) {
+    state.pendingChanges[agentName] = { provider: currentProvider, model: newModel };
+  } else {
+    delete state.pendingChanges[agentName];
+  }
+
+  updateConfigButtons(agentName);
+}
+
+function updateConfigButtons(agentName) {
+  const saveBtn = document.getElementById(`save-${agentName}`);
+  const hasPending = !!state.pendingChanges[agentName];
+  if (saveBtn) {
+    saveBtn.disabled = !hasPending;
+    saveBtn.classList.toggle('cfg-btn--active', hasPending);
+  }
+}
+
+async function saveAgentConfig(agentName) {
+  const pending = state.pendingChanges[agentName];
+  if (!pending) return;
+
+  const saveBtn = document.getElementById(`save-${agentName}`);
+  if (saveBtn) {
+    saveBtn.disabled = true;
+    saveBtn.textContent = '...';
+  }
+
+  const result = await patchJSON(`/v1/agents/${agentName}/config`, pending);
+
+  if (result?.message) {
+    // Success — update local state
+    const agent = state.agents.find(a => a.name === agentName);
+    if (agent) {
+      agent.provider = pending.provider;
+      agent.model = pending.model;
+    }
+    delete state.pendingChanges[agentName];
+
+    if (saveBtn) {
+      saveBtn.textContent = 'SAVED';
+      saveBtn.classList.remove('cfg-btn--active');
+      saveBtn.classList.add('cfg-btn--saved');
+      setTimeout(() => {
+        if (saveBtn) {
+          saveBtn.textContent = 'SAVE';
+          saveBtn.classList.remove('cfg-btn--saved');
+        }
+      }, 2000);
+    }
+
+    // Show restart banner
+    showRestartBanner();
+  } else {
+    // Error
+    if (saveBtn) {
+      saveBtn.textContent = 'ERR';
+      saveBtn.classList.add('cfg-btn--error');
+      setTimeout(() => {
+        if (saveBtn) {
+          saveBtn.textContent = 'SAVE';
+          saveBtn.disabled = false;
+          saveBtn.classList.remove('cfg-btn--error');
+          saveBtn.classList.add('cfg-btn--active');
+        }
+      }, 2000);
+    }
+  }
+}
+
+function showRestartBanner() {
+  let banner = document.getElementById('restartBanner');
+  if (!banner) {
+    banner = document.createElement('div');
+    banner.id = 'restartBanner';
+    banner.className = 'restart-banner';
+    banner.innerHTML = `
+      <span class="restart-banner-text">Config saved. Restart daemon to apply changes.</span>
+      <button class="cfg-btn cfg-btn--restart" onclick="restartDaemon()">RESTART DAEMON</button>
+      <button class="cfg-btn cfg-btn--dismiss" onclick="dismissBanner()">DISMISS</button>
+    `;
+    // Insert after the header
+    const header = document.querySelector('.header');
+    header.parentNode.insertBefore(banner, header.nextSibling);
+  }
+  banner.style.display = 'flex';
+}
+
+function dismissBanner() {
+  const banner = document.getElementById('restartBanner');
+  if (banner) banner.style.display = 'none';
+}
+
+async function restartDaemon() {
+  const banner = document.getElementById('restartBanner');
+  const btn = banner?.querySelector('.cfg-btn--restart');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'RESTARTING...';
+  }
+
+  const result = await postJSON('/v1/admin/reload');
+
+  if (result?.status === 'restarted') {
+    if (btn) {
+      btn.textContent = 'RESTARTED';
+      btn.classList.add('cfg-btn--saved');
+    }
+    // Wait a moment then hide banner and refresh
+    setTimeout(() => {
+      dismissBanner();
+      refreshData();
+    }, 2000);
+  } else {
+    const msg = result?.message || 'Restart failed';
+    if (btn) {
+      btn.textContent = 'FAILED';
+      btn.classList.add('cfg-btn--error');
+      setTimeout(() => {
+        btn.textContent = 'RESTART DAEMON';
+        btn.disabled = false;
+        btn.classList.remove('cfg-btn--error');
+      }, 3000);
+    }
+    // Show the message
+    const textEl = banner?.querySelector('.restart-banner-text');
+    if (textEl) textEl.textContent = msg;
+  }
+}
+
 function renderAgentsTable() {
   const tbody = document.getElementById('agentsBody');
   const agents = state.agents;
   const metricsAgents = state.metrics?.agents || {};
+  const hasProviders = Object.keys(state.providerModels).length > 0;
 
   if (!agents.length) {
-    tbody.innerHTML = '<tr><td colspan="7" class="empty-state">No agents configured. Run: alfred setup</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8" class="empty-state">No agents configured. Run: alfred setup</td></tr>';
     return;
   }
 
@@ -228,15 +451,37 @@ function renderAgentsTable() {
     const m = metricsAgents[agent.name] || {};
     const sessions = state.sessions?.[agent.name] || [];
     const totalTokens = (m.input_tokens || 0) + (m.output_tokens || 0);
-    const provider = agent.provider || state.status?.primary_llm?.provider || '?';
-    const model = agent.model || state.status?.primary_llm?.model || '?';
-    // Shorten model name for display
-    const modelShort = model.length > 25 ? model.slice(0, 22) + '...' : model;
+    const provider = state.pendingChanges[agent.name]?.provider || agent.provider || state.status?.primary_llm?.provider || '?';
+    const model = state.pendingChanges[agent.name]?.model || agent.model || state.status?.primary_llm?.model || '?';
+
+    // Provider / Model column — dropdowns if registry loaded, plain text otherwise
+    let providerModelHtml;
+    if (hasProviders) {
+      const hasPending = !!state.pendingChanges[agent.name];
+      providerModelHtml = `
+        <div class="cfg-inline">
+          <select id="provider-${escHtml(agent.name)}" class="cfg-select cfg-select--provider"
+                  onchange="onProviderChange('${escHtml(agent.name)}', this)">
+            ${buildProviderOptions(provider)}
+          </select>
+          <span class="cfg-sep">/</span>
+          <select id="model-${escHtml(agent.name)}" class="cfg-select cfg-select--model"
+                  onchange="onModelChange('${escHtml(agent.name)}', this)">
+            ${buildModelOptions(provider, model)}
+          </select>
+          <button id="save-${escHtml(agent.name)}" class="cfg-btn cfg-btn--save${hasPending ? ' cfg-btn--active' : ''}"
+                  onclick="saveAgentConfig('${escHtml(agent.name)}')"
+                  ${hasPending ? '' : 'disabled'}>SAVE</button>
+        </div>`;
+    } else {
+      const modelShort = model.length > 25 ? model.slice(0, 22) + '...' : model;
+      providerModelHtml = `<span class="text-dim">${escHtml(provider)}/${escHtml(modelShort)}</span>`;
+    }
 
     html += `<tr>
       <td class="fw-600" style="color:#fff;">${escHtml(agent.name)}</td>
       <td>${statusBadge(agent.status || 'active')}</td>
-      <td class="text-dim">${escHtml(provider)}/${escHtml(modelShort)}</td>
+      <td>${providerModelHtml}</td>
       <td>${sessions.length || 0}</td>
       <td>${fmtNum(m.messages || 0)}</td>
       <td>${fmtTokens(totalTokens)}</td>
