@@ -186,6 +186,14 @@ def create_app() -> FastAPI:
             return FileResponse(str(html_file), media_type="text/html")
         return {"message": "Alfred AI API", "docs": "/docs"}
 
+    @app.get("/architecture", include_in_schema=False)
+    async def architecture():
+        """Serve the architecture diagram page."""
+        html_file = static_dir / "architecture.html"
+        if html_file.exists():
+            return FileResponse(str(html_file), media_type="text/html")
+        return {"error": "Architecture page not found"}
+
     # ─── Health ──────────────────────────────────────────
 
     @app.get("/health")

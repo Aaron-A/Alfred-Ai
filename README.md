@@ -117,127 +117,60 @@ Auto-refreshes every 10 seconds. Uses the WatchTower dark theme.
 
 ## Architecture
 
-### System Overview
+Four entry points (CLI, Discord, REST API, Scheduler) feed into the Agent Framework. Each agent has its own workspace, tools, memory, and LLM provider. Tools auto-discover credentials from config. Memory is vector-searched on every interaction.
 
-```mermaid
-graph TD
-    subgraph Entry["Entry Points"]
-        CLI["CLI<br/><code>alfred ...</code>"]
-        DISC["Discord Bot"]
-        API["REST API<br/><code>:7700</code>"]
-        SCHED["Scheduler<br/><code>cron</code>"]
-    end
-
-    subgraph Core["Core Framework"]
-        AGENT["Agent Framework<br/><code>core/agent.py</code>"]
-        LLM["LLM Client<br/><code>core/llm.py</code>"]
-        MEM["Memory Store<br/><code>core/memory.py</code>"]
-        TOOLS["Tool Registry<br/><code>core/tools.py</code>"]
-        CFG["Config<br/><code>alfred.json</code>"]
-    end
-
-    subgraph Agents["Agents"]
-        ALF["alfred<br/>General Assistant<br/><i>Claude Sonnet</i>"]
-        TRD["trader<br/>Market Analyst<br/><i>Claude Sonnet</i>"]
-        XM["xmedia<br/>X/Twitter Manager<br/><i>Grok 4-1-fast</i>"]
-    end
-
-    subgraph SharedTools["Shared Tools"]
-        WS["web_search"]
-        HR["http_request"]
-        XA["x_api"]
-        FU["fetch_url"]
-        FO["file_ops"]
-        CALC["calculator"]
-        DT["datetime"]
-    end
-
-    subgraph Builtin["Built-in Tools"]
-        MS["memory_search"]
-        MSTO["memory_store"]
-        DEL["delegate_to"]
-        SEND["send_message"]
-        CMD["run_command"]
-    end
-
-    subgraph Data["Data Stores"]
-        LANCE[("LanceDB<br/>Vectors")]
-        SQLITE[("SQLite<br/>Metrics")]
-        SESS[("Session Files<br/>JSON")]
-    end
-
-    subgraph External["External Services"]
-        ALP["Alpaca API"]
-        XAPI["X/Twitter API"]
-        BRAVE["Brave Search"]
-        PROV["LLM Providers<br/>Anthropic · xAI · OpenAI"]
-    end
-
-    CLI --> AGENT
-    DISC --> AGENT
-    API --> AGENT
-    SCHED --> AGENT
-
-    AGENT --> LLM
-    AGENT --> MEM
-    AGENT --> TOOLS
-    AGENT --> CFG
-
-    CFG -.->|credentials| HR
-    CFG -.->|credentials| XA
-    CFG -.->|provider config| LLM
-
-    AGENT --- ALF
-    AGENT --- TRD
-    AGENT --- XM
-
-    TOOLS --- SharedTools
-    TOOLS --- Builtin
-
-    MEM --> LANCE
-    AGENT --> SQLITE
-    AGENT --> SESS
-
-    LLM --> PROV
-    HR --> ALP
-    XA --> XAPI
-    WS --> BRAVE
-
-    style Entry fill:#2d3748,stroke:#4a5568,color:#e2e8f0
-    style Core fill:#1a365d,stroke:#2b6cb0,color:#e2e8f0
-    style Agents fill:#22543d,stroke:#38a169,color:#e2e8f0
-    style SharedTools fill:#553c9a,stroke:#805ad5,color:#e2e8f0
-    style Builtin fill:#553c9a,stroke:#805ad5,color:#e2e8f0
-    style Data fill:#744210,stroke:#d69e2e,color:#e2e8f0
-    style External fill:#742a2a,stroke:#e53e3e,color:#e2e8f0
+```
+                     ┌─────────────────────────────────────────┐
+                     │            ENTRY POINTS                 │
+                     │   CLI  ·  Discord  ·  API  ·  Scheduler │
+                     └──────────────────┬──────────────────────┘
+                                        │
+                     ┌──────────────────▼──────────────────────┐
+                     │          AGENT FRAMEWORK                │
+                     │                                         │
+                     │  ┌─────────┐ ┌───────┐ ┌────────────┐  │
+                     │  │  Config  │ │  LLM  │ │   Memory   │  │
+                     │  │  (json)  │ │Client │ │  (LanceDB) │  │
+                     │  └────┬────┘ └───┬───┘ └─────┬──────┘  │
+                     │       │          │           │          │
+                     │  credentials  provider    vectors       │
+                     │  auto-inject  fallback    hybrid search │
+                     └──────────────────┬──────────────────────┘
+                                        │
+              ┌─────────────────────────┼─────────────────────────┐
+              │                         │                         │
+   ┌──────────▼─────────┐  ┌───────────▼──────────┐  ┌──────────▼──────────┐
+   │      AGENTS         │  │       TOOLS           │  │     DATA STORES     │
+   │                     │  │                       │  │                     │
+   │  alfred   (Claude)  │  │  web_search           │  │  LanceDB  (vectors) │
+   │  trader   (Claude)  │  │  http_request (+auth) │  │  SQLite   (metrics) │
+   │  xmedia   (Grok)   │  │  x_api  (OAuth 1.0a)  │  │  Sessions (JSON)    │
+   │                     │  │  fetch_url · file_ops  │  │                     │
+   │  Each has:          │  │  calculator · datetime │  │                     │
+   │  SOUL.md  AGENTS.md │  │                       │  │                     │
+   │  USER.md  TOOLS.md  │  │  memory_search/store  │  │                     │
+   │  memory/  tools/    │  │  delegate_to          │  │                     │
+   └─────────────────────┘  │  send_message         │  └─────────────────────┘
+                            └───────────┬───────────┘
+                                        │
+                     ┌──────────────────▼──────────────────────┐
+                     │         EXTERNAL SERVICES               │
+                     │                                         │
+                     │  Alpaca API    (paper trading)           │
+                     │  X/Twitter API (OAuth 1.0a)             │
+                     │  Brave Search  (web results)            │
+                     │  LLM Providers (Anthropic · xAI · OpenAI)│
+                     └─────────────────────────────────────────┘
 ```
 
-### Agent Execution Flow
+**Agent execution flow:**
 
-```mermaid
-sequenceDiagram
-    participant U as User / Discord / API
-    participant A as Agent
-    participant M as Memory (LanceDB)
-    participant L as LLM Provider
-    participant T as Tool
-    participant S as Session / Metrics
-
-    U->>A: message
-    A->>M: auto-search relevant memories
-    M-->>A: matching context
-    A->>A: build system prompt<br/>(SOUL + AGENTS + USER + TOOLS + memories)
-    A->>L: prompt + tools
-    loop Tool Rounds (max N)
-        L-->>A: tool_call(name, args)
-        A->>T: execute tool
-        T-->>A: result
-        A->>L: tool result
-    end
-    L-->>A: final response
-    A->>S: save session + record metrics
-    A-->>U: response
 ```
+Message in → memory auto-recall → build system prompt → LLM call
+  → tool loop (call → execute → feed result → repeat) → save session → respond
+```
+
+> **Interactive diagram:** Start Alfred and visit [`localhost:7700/architecture`](http://localhost:7700/architecture) for the full visual version.
 
 ### Project Structure
 
