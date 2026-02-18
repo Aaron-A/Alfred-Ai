@@ -294,35 +294,41 @@ svg { display: block; margin: 0 auto; }
     </defs>
 
     <!-- ═══════ GROUP: ENTRY POINTS ═══════ -->
-    <rect x="200" y="10" width="560" height="70" rx="4" fill="none" stroke="#2a2a2a" stroke-dasharray="4,3"/>
-    <text x="216" y="28" class="group-label">Entry Points</text>
+    <rect x="140" y="10" width="680" height="70" rx="4" fill="none" stroke="#2a2a2a" stroke-dasharray="4,3"/>
+    <text x="156" y="28" class="group-label">Entry Points</text>
 
     <g class="node-group">
-      <rect x="210" y="36" width="110" height="36" fill="#1e293b" stroke="#334155"/>
-      <text x="265" y="50" class="node-label">CLI</text>
-      <text x="265" y="63" class="node-sublabel">alfred ...</text>
+      <rect x="150" y="36" width="100" height="36" fill="#1e293b" stroke="#334155"/>
+      <text x="200" y="50" class="node-label">CLI</text>
+      <text x="200" y="63" class="node-sublabel">alfred ...</text>
     </g>
     <g class="node-group">
-      <rect x="340" y="36" width="120" height="36" fill="#1e293b" stroke="#334155"/>
-      <text x="400" y="50" class="node-label">Discord Bot</text>
-      <text x="400" y="63" class="node-sublabel">channels</text>
+      <rect x="268" y="36" width="120" height="36" fill="#1e293b" stroke="#334155"/>
+      <text x="328" y="50" class="node-label">Discord Bot</text>
+      <text x="328" y="63" class="node-sublabel">channels</text>
     </g>
     <g class="node-group">
-      <rect x="480" y="36" width="120" height="36" fill="#1e293b" stroke="#334155"/>
-      <text x="540" y="50" class="node-label">REST API</text>
-      <text x="540" y="63" class="node-sublabel">:7700</text>
+      <rect x="406" y="36" width="120" height="36" fill="#1e293b" stroke="#334155"/>
+      <text x="466" y="50" class="node-label">REST API</text>
+      <text x="466" y="63" class="node-sublabel">:7700</text>
     </g>
     <g class="node-group">
-      <rect x="620" y="36" width="130" height="36" fill="#1e293b" stroke="#334155"/>
-      <text x="685" y="50" class="node-label">Scheduler</text>
-      <text x="685" y="63" class="node-sublabel">cron</text>
+      <rect x="544" y="36" width="120" height="36" fill="#1e293b" stroke="#334155"/>
+      <text x="604" y="50" class="node-label">Dashboard</text>
+      <text x="604" y="63" class="node-sublabel">web UI</text>
+    </g>
+    <g class="node-group">
+      <rect x="682" y="36" width="130" height="36" fill="#1e293b" stroke="#334155"/>
+      <text x="747" y="50" class="node-label">Scheduler</text>
+      <text x="747" y="63" class="node-sublabel">cron</text>
     </g>
 
     <!-- Arrows from entry points down to Agent Framework -->
-    <line x1="265" y1="72" x2="480" y2="140" class="edge edge-solid" marker-end="url(#arrow)"/>
-    <line x1="400" y1="72" x2="480" y2="140" class="edge edge-solid" marker-end="url(#arrow)"/>
-    <line x1="540" y1="72" x2="480" y2="140" class="edge edge-solid" marker-end="url(#arrow)"/>
-    <line x1="685" y1="72" x2="480" y2="140" class="edge edge-solid" marker-end="url(#arrow)"/>
+    <line x1="200" y1="72" x2="480" y2="140" class="edge edge-solid" marker-end="url(#arrow)"/>
+    <line x1="328" y1="72" x2="480" y2="140" class="edge edge-solid" marker-end="url(#arrow)"/>
+    <line x1="466" y1="72" x2="480" y2="140" class="edge edge-solid" marker-end="url(#arrow)"/>
+    <line x1="604" y1="72" x2="480" y2="140" class="edge edge-solid" marker-end="url(#arrow)"/>
+    <line x1="747" y1="72" x2="480" y2="140" class="edge edge-solid" marker-end="url(#arrow)"/>
 
     <!-- ═══════ GROUP: CORE FRAMEWORK ═══════ -->
     <rect x="280" y="110" width="400" height="120" rx="4" fill="none" stroke="#1e40af" stroke-opacity="0.4"/>
@@ -625,7 +631,7 @@ svg { display: block; margin: 0 auto; }
       <div class="tree-file"><span class="tree-name">tools.py</span><span class="tree-desc">tool registry</span></div>
       <div class="tree-file"><span class="tree-name">scheduler.py</span><span class="tree-desc">cron engine</span></div>
       <div class="tree-file"><span class="tree-name">discord.py</span><span class="tree-desc">bot + daemon</span></div>
-      <div class="tree-file"><span class="tree-name">api.py</span><span class="tree-desc">FastAPI server</span></div>
+      <div class="tree-file"><span class="tree-name">api.py</span><span class="tree-desc">FastAPI server + agent creation</span></div>
       <div class="tree-file"><span class="tree-name">metrics_store.py</span><span class="tree-desc">SQLite metrics</span></div>
       <div class="tree-file"><span class="tree-name">workspace.py</span><span class="tree-desc">workspace mgmt</span></div>
       <div class="tree-file"><span class="tree-name">tool_meta.py</span><span class="tree-desc">runtime tool creation</span></div>
@@ -704,6 +710,10 @@ svg { display: block; margin: 0 auto; }
     <div class="tree-group">
       <h3 class="clr-cyan">Graceful Degradation</h3>
       <div class="tree-file"><span class="tree-desc">LLM fallback, scheduler exception isolation, metrics never block agents</span></div>
+    </div>
+    <div class="tree-group">
+      <h3 class="clr-cyan">Dashboard-Driven</h3>
+      <div class="tree-file"><span class="tree-desc">Create agents, edit configs, and monitor metrics from the web UI. Optional LLM-generated SOUL.md</span></div>
     </div>
   </div>
 </div>

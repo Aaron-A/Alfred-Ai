@@ -109,7 +109,8 @@ alfred api start       # API only, no scheduler/Discord
 
 The dashboard shows:
 - **Stats grid** — agent count, total messages, token usage, avg response time, Discord health
-- **Agents tab** — all agents with status, provider/model, session count, metrics
+- **Agents tab** — all agents with status, provider/model (editable via modal), session count, metrics
+- **+ New Agent** — create agents directly from the dashboard with optional LLM-generated SOUL.md
 - **Schedules tab** — all scheduled tasks with run stats, success rates, next fire time
 - **Metrics tab** — per-agent cards with detailed breakdowns and recent errors
 
@@ -117,16 +118,16 @@ Auto-refreshes every 10 seconds. Uses the WatchTower dark theme.
 
 ## Architecture
 
-Four entry points (CLI, Discord, REST API, Scheduler) feed into the Agent Framework. Each agent has its own workspace, tools, memory, and LLM provider. Tools auto-discover credentials from config. Memory is vector-searched on every interaction.
+Five entry points (CLI, Discord, REST API, Web Dashboard, Scheduler) feed into the Agent Framework. Each agent has its own workspace, tools, memory, and LLM provider. Tools auto-discover credentials from config. Memory is vector-searched on every interaction. The dashboard can create new agents with LLM-generated personalities.
 
 ```
-                     ┌─────────────────────────────────────────┐
-                     │            ENTRY POINTS                 │
-                     │   CLI  ·  Discord  ·  API  ·  Scheduler │
-                     └──────────────────┬──────────────────────┘
-                                        │
-                     ┌──────────────────▼──────────────────────┐
-                     │          AGENT FRAMEWORK                │
+                     ┌──────────────────────────────────────────────────┐
+                     │                   ENTRY POINTS                   │
+                     │   CLI · Discord · API · Dashboard · Scheduler    │
+                     └────────────────────────┬─────────────────────────┘
+                                              │
+                     ┌────────────────────────▼────────────────────────┐
+                     │              AGENT FRAMEWORK                    │
                      │                                         │
                      │  ┌─────────┐ ┌───────┐ ┌────────────┐  │
                      │  │  Config  │ │  LLM  │ │   Memory   │  │
@@ -191,7 +192,7 @@ alfred-ai/
     models.py         Model registry and provider catalogs
     scheduler.py      Cron-based task scheduling
     discord.py        Discord bot + daemon management
-    api.py            REST API server (FastAPI)
+    api.py            REST API server + agent creation (FastAPI)
     logging.py        Structured logging + agent metrics
   cli/
     setup.py          Interactive setup wizard
@@ -207,11 +208,12 @@ alfred-ai/
     calculator.py     Safe math expression evaluator
     file_ops.py       Read/write/list files in agent workspace
   static/
-    dashboard.html    Web dashboard (single page)
+    dashboard.html      Web dashboard (single page)
+    architecture.html   Interactive architecture diagrams
     css/
-      dashboard.css   WatchTower dark theme
+      dashboard.css     WatchTower dark theme
     js/
-      dashboard.js    API fetching, rendering, auto-refresh
+      dashboard.js      API fetching, rendering, modals, auto-refresh
 ```
 
 ### Key Concepts
@@ -322,14 +324,18 @@ POST /v1/webhook/{agent}   Send an external event to an agent
 POST /v1/memory/search     Search vector memory
 POST /v1/memory/store      Store a new memory
 GET  /v1/agents            List all agents
+POST /v1/agents            Create a new agent (with optional SOUL.md generation)
 GET  /v1/agents/{name}     Agent details + session info
 POST /v1/agents/{name}/reset  Reset an agent's session
+PATCH /v1/agents/{name}/config  Update agent provider/model
 GET  /v1/sessions/{agent}  List saved sessions for an agent
 GET  /v1/sessions/{agent}/{id}  Get session messages (?last=N for recent)
 DELETE /v1/sessions/{agent}/{id}  Delete a session
 GET  /v1/sessions/{agent}/{id}/export  Export as markdown/text
 GET  /v1/status            System status
 GET  /v1/metrics           Agent activity metrics (includes token usage)
+GET  /v1/providers         Provider/model registry for UI dropdowns
+POST /v1/admin/reload      Restart the daemon to pick up config changes
 GET  /health               Health check
 ```
 
@@ -362,6 +368,21 @@ curl http://localhost:7700/v1/sessions/alfred/cli/export
 
 # Delete a session
 curl -X DELETE http://localhost:7700/v1/sessions/alfred/cli
+
+# Create a new agent (with optional LLM-generated SOUL.md)
+curl -X POST http://localhost:7700/v1/agents \
+  -H "Content-Type: application/json" \
+  -d '{"name": "research", "description": "Research assistant", "provider": "anthropic", "model": "claude-sonnet-4-6"}'
+
+# Create with LLM-generated personality
+curl -X POST http://localhost:7700/v1/agents \
+  -H "Content-Type: application/json" \
+  -d '{"name": "analyst", "description": "Data analyst", "provider": "openai", "model": "gpt-4.1", "soul_prompt": "A meticulous data analyst who loves spreadsheets and hates ambiguity"}'
+
+# Change an agent's model
+curl -X PATCH http://localhost:7700/v1/agents/alfred/config \
+  -H "Content-Type: application/json" \
+  -d '{"provider": "anthropic", "model": "claude-sonnet-4-6"}'
 ```
 
 ## Web Search
