@@ -272,6 +272,8 @@ def create_app() -> FastAPI:
 
         return {
             "version": cfg.get("version", "0.1.0"),
+            "timezone": config.TIMEZONE,
+            "server_time": datetime.now(config.tz).isoformat(),
             "primary_llm": primary or None,
             "secondary_llm": secondary or None,
             "providers": list(cfg.get("providers", {}).keys()),
@@ -980,51 +982,51 @@ def create_app() -> FastAPI:
         """
         Restart the daemon process to pick up config changes.
 
-        Sends SIGHUP to the daemon process if running, which triggers
-        a graceful restart. If no daemon is running, returns a message
-        telling the user to start it manually.
+        Spawns a new daemon process, then schedules SIGTERM of the
+        current process so the HTTP response is sent before shutdown.
+        The new daemon waits for the port to be free before binding.
         """
         import signal
+        import subprocess
 
-        pid_file = config.DATA_DIR / "daemon.pid"
+        pid_file = config.DATA_DIR / "discord.pid"
 
         if not pid_file.exists():
-            return {"status": "no_daemon", "message": "No daemon PID file found. Start with: alfred daemon start"}
+            return {"status": "no_daemon", "message": "No daemon PID file found. Start with: alfred start"}
 
         try:
             pid = int(pid_file.read_text().strip())
-            # Check if process exists
-            os.kill(pid, 0)
+            os.kill(pid, 0)  # Check if process exists
         except (ValueError, ProcessLookupError, PermissionError):
-            # PID file is stale
             pid_file.unlink(missing_ok=True)
-            return {"status": "stale_pid", "message": "Daemon PID is stale. Restart manually: alfred daemon start"}
+            return {"status": "stale_pid", "message": "Daemon PID is stale. Restart manually: alfred start"}
 
         try:
-            # Send SIGTERM to trigger graceful shutdown, then caller can restart
-            os.kill(pid, signal.SIGTERM)
-            logger.info(f"Sent SIGTERM to daemon PID {pid}")
+            alfred_script = config.PROJECT_ROOT / "alfred"
+            log_file = config.DATA_DIR / "alfred.log"
 
-            # Wait briefly for process to die
-            for _ in range(10):
-                await asyncio.sleep(0.3)
-                try:
-                    os.kill(pid, 0)
-                except ProcessLookupError:
-                    pid_file.unlink(missing_ok=True)
-                    # Now restart the daemon
-                    import subprocess
-                    subprocess.Popen(
-                        ["python", "-m", "cli.main", "daemon", "start"],
-                        cwd=str(config.PROJECT_ROOT),
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        start_new_session=True,
-                    )
-                    logger.info("Daemon restart initiated")
-                    return {"status": "restarted", "message": "Daemon restarted successfully"}
+            # Spawn the new daemon — it will wait for the port to be free
+            lf = open(log_file, "a")
+            subprocess.Popen(
+                [str(alfred_script), "start", "--daemon-child"],
+                stdout=lf,
+                stderr=lf,
+                stdin=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            lf.close()
+            logger.info("New daemon process spawned for restart")
 
-            return {"status": "timeout", "message": f"Daemon PID {pid} did not stop in time. Kill manually."}
+            # Schedule self-termination after a short delay so the
+            # HTTP response is sent back to the client first
+            async def _delayed_shutdown():
+                await asyncio.sleep(0.5)
+                logger.info(f"Sending SIGTERM to self (PID {pid}) for restart")
+                os.kill(pid, signal.SIGTERM)
+
+            asyncio.ensure_future(_delayed_shutdown())
+
+            return {"status": "restarting", "message": "Restart initiated — new daemon spawning"}
 
         except Exception as e:
             logger.error(f"Reload failed: {e}")

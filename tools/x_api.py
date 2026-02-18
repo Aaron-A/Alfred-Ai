@@ -253,15 +253,39 @@ def x_post_tweet(text: str, reply_to: str = None) -> str:
     if len(text) > 280:
         return f"Error: Tweet is {len(text)} chars, max 280."
 
+    # Guard: if text starts with @username but no reply_to, the post will be a
+    # standalone mention (not a threaded reply). Warn the caller so the LLM can
+    # retry with the correct reply_to tweet ID.
+    if text.lstrip().startswith("@") and not reply_to:
+        return (
+            "Error: Text starts with @username but no reply_to tweet ID was provided. "
+            "Without reply_to, this will post as a standalone mention — NOT a threaded reply. "
+            "Please call again with the reply_to parameter set to the tweet ID you want to reply to."
+        )
+
     body = {"text": text}
     if reply_to:
         body["reply"] = {"in_reply_to_tweet_id": str(reply_to)}
 
-    return x_api_request(
+    result = x_api_request(
         endpoint="/2/tweets",
         method="POST",
         body=json.dumps(body),
     )
+
+    # Parse the response to extract the tweet ID for convenience
+    try:
+        lines = result.split("\n", 1)
+        if lines[0].startswith("HTTP 2"):
+            data = json.loads(lines[1])
+            tweet_id = data.get("data", {}).get("id", "?")
+            action = "Reply" if reply_to else "Tweet"
+            tweet_url = f"https://x.com/DarkStoneCap/status/{tweet_id}"
+            return f"{action} posted successfully.\nLink (copy this exactly): {tweet_url}\n{result}"
+    except (json.JSONDecodeError, IndexError, KeyError):
+        pass
+
+    return result
 
 
 def x_like_tweet(tweet_id: str) -> str:
@@ -361,14 +385,19 @@ def register(registry: ToolRegistry):
     registry.register_function(
         name="x_post_tweet",
         description=(
-            "Post a tweet to X/Twitter. Max 280 characters. "
-            "Optionally reply to an existing tweet by providing reply_to tweet ID."
+            "Post a tweet or reply to X/Twitter. Max 280 characters. "
+            "IMPORTANT: To reply to a tweet, you MUST provide the reply_to parameter "
+            "with the tweet ID. Without reply_to, the post is a standalone tweet — "
+            "starting text with @username alone does NOT make it a reply."
         ),
         fn=x_post_tweet,
         parameters=[
             ToolParameter("text", "string", "The tweet text (max 280 chars)"),
             ToolParameter("reply_to", "string",
-                "Tweet ID to reply to (optional — omit for a new tweet)", required=False),
+                "Tweet ID to reply to. REQUIRED for replies — without this, "
+                "the tweet will NOT appear as a reply in the thread, even if "
+                "text starts with @username. Omit only for original tweets.",
+                required=False),
         ],
         category="social",
         source="shared",

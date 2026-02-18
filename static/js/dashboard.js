@@ -447,6 +447,7 @@ function dismissBanner() {
 async function restartDaemon() {
   const banner = document.getElementById('restartBanner');
   const btn = banner?.querySelector('.modal-btn--restart');
+  const textEl = banner?.querySelector('.restart-banner-text');
   if (btn) {
     btn.disabled = true;
     btn.textContent = 'RESTARTING...';
@@ -454,15 +455,48 @@ async function restartDaemon() {
 
   const result = await postJSON('/v1/admin/reload');
 
-  if (result?.status === 'restarted') {
-    if (btn) {
-      btn.textContent = 'RESTARTED';
-      btn.className = 'modal-btn modal-btn--restart modal-btn--saved';
-    }
-    setTimeout(() => {
-      dismissBanner();
-      refreshData();
-    }, 2000);
+  if (result?.status === 'restarting' || result?.status === 'restarted') {
+    if (textEl) textEl.textContent = 'Daemon restarting — waiting for API...';
+
+    // Poll until the API comes back (old process dies, new one starts)
+    let attempts = 0;
+    const maxAttempts = 20;
+    const pollInterval = 1500;
+
+    const poll = setInterval(async () => {
+      attempts++;
+      try {
+        const res = await fetch(API + '/health');
+        if (res.ok) {
+          clearInterval(poll);
+          if (btn) {
+            btn.textContent = 'RESTARTED';
+            btn.className = 'modal-btn modal-btn--restart modal-btn--saved';
+          }
+          if (textEl) textEl.textContent = 'Daemon restarted successfully.';
+          setTimeout(() => {
+            dismissBanner();
+            refreshData();
+          }, 1500);
+        }
+      } catch (e) {
+        // API not up yet — keep polling
+        if (textEl) textEl.textContent = `Restarting... (${attempts}/${maxAttempts})`;
+      }
+      if (attempts >= maxAttempts) {
+        clearInterval(poll);
+        if (btn) {
+          btn.textContent = 'TIMEOUT';
+          btn.className = 'modal-btn modal-btn--restart modal-btn--error';
+          setTimeout(() => {
+            btn.textContent = 'RESTART DAEMON';
+            btn.disabled = false;
+            btn.className = 'modal-btn modal-btn--restart';
+          }, 3000);
+        }
+        if (textEl) textEl.textContent = 'Restart timed out. Try: alfred stop && alfred start';
+      }
+    }, pollInterval);
   } else {
     const msg = result?.message || 'Restart failed';
     if (btn) {
@@ -474,7 +508,6 @@ async function restartDaemon() {
         btn.className = 'modal-btn modal-btn--restart';
       }, 3000);
     }
-    const textEl = banner?.querySelector('.restart-banner-text');
     if (textEl) textEl.textContent = msg;
   }
 }

@@ -73,6 +73,8 @@ def http_request(
     timeout: int = 30,
 ) -> str:
     """Make an HTTP request and return the response."""
+    # LLMs sometimes HTML-encode ampersands in URLs (e.g. &amp; instead of &)
+    url = url.replace("&amp;", "&")
     timeout = min(max(5, timeout), 60)
     method = method.upper()
 

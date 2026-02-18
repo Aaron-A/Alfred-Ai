@@ -692,7 +692,13 @@ class DiscordBot:
             if foreground:
                 print("\n  Shutting down...")
         finally:
-            PID_FILE.unlink(missing_ok=True)
+            # Only clean up PID file if it still belongs to us (avoid clobbering
+            # a new daemon's PID during reload restarts)
+            try:
+                if PID_FILE.exists() and int(PID_FILE.read_text().strip()) == os.getpid():
+                    PID_FILE.unlink(missing_ok=True)
+            except (ValueError, OSError):
+                PID_FILE.unlink(missing_ok=True)
             HEARTBEAT_FILE.unlink(missing_ok=True)
             logger.info("Alfred stopped")
 

@@ -11,6 +11,7 @@ LLM Resolution Order (per agent):
 import os
 import json
 from pathlib import Path
+from zoneinfo import ZoneInfo
 from dotenv import load_dotenv
 
 # Load .env from project root
@@ -60,6 +61,19 @@ class Config:
     DEFAULT_TOP_K: int = int(os.getenv("ALFRED_TOP_K", "10"))
     HYBRID_VECTOR_WEIGHT: float = float(os.getenv("ALFRED_VECTOR_WEIGHT", "0.7"))
     HYBRID_TEXT_WEIGHT: float = float(os.getenv("ALFRED_TEXT_WEIGHT", "0.3"))
+
+    # ─── Timezone ─────────────────────────────────────────────────
+
+    @property
+    def TIMEZONE(self) -> str:
+        """Configured timezone name (IANA format). Reads from alfred.json settings.timezone."""
+        cfg = _load_config()
+        return cfg.get("settings", {}).get("timezone", "UTC")
+
+    @property
+    def tz(self) -> ZoneInfo:
+        """Get ZoneInfo object for the configured timezone."""
+        return ZoneInfo(self.TIMEZONE)
 
     # ─── LLM Provider Config ────────────────────────────────────
 

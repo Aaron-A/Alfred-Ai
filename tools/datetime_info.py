@@ -6,8 +6,9 @@ LLMs often don't know the current date/time — this tool fills that gap.
 Uses only stdlib (datetime, zoneinfo). No external dependencies.
 """
 
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone as _tz, timedelta
 from core.tools import ToolRegistry, ToolParameter
+from core.config import config
 from core.logging import get_logger
 
 logger = get_logger("datetime_info")
@@ -26,7 +27,7 @@ def register(registry: ToolRegistry):
         parameters=[
             ToolParameter(
                 "timezone", "string",
-                "Timezone name (e.g. 'US/Eastern', 'Europe/London', 'Asia/Tokyo'). Default: UTC",
+                "Timezone name (e.g. 'US/Eastern', 'Europe/London', 'Asia/Tokyo'). Default: Alfred's configured timezone",
                 required=False,
             ),
             ToolParameter(
@@ -58,10 +59,12 @@ def register(registry: ToolRegistry):
     )
 
 
-def datetime_info(timezone_name: str = "UTC", format: str = "full") -> str:
+def datetime_info(timezone: str = None, format: str = "full") -> str:
     """Get current date/time info."""
+    if timezone is None:
+        timezone = config.TIMEZONE
     try:
-        tz = _get_timezone(timezone_name)
+        tz = _get_timezone(timezone)
     except Exception as e:
         return f"Error: {e}"
 
@@ -77,9 +80,9 @@ def datetime_info(timezone_name: str = "UTC", format: str = "full") -> str:
         return now.strftime("%H:%M:%S %Z")
 
     # Full format
-    utc_now = datetime.now(timezone.utc)
+    utc_now = datetime.now(_tz.utc)
     lines = [
-        f"Current time ({timezone_name}):",
+        f"Current time ({timezone}):",
         f"  Date:      {now.strftime('%Y-%m-%d')}",
         f"  Time:      {now.strftime('%H:%M:%S %Z')}",
         f"  Day:       {now.strftime('%A')}",
@@ -89,7 +92,7 @@ def datetime_info(timezone_name: str = "UTC", format: str = "full") -> str:
     ]
 
     # Add UTC if not already UTC
-    if timezone_name.upper() != "UTC":
+    if timezone.upper() != "UTC":
         lines.append(f"  UTC:       {utc_now.strftime('%Y-%m-%d %H:%M:%S')}")
 
     return "\n".join(lines)
@@ -141,7 +144,7 @@ def date_diff(date1: str, date2: str) -> str:
 def _get_timezone(name: str):
     """Get a timezone object by name. Tries zoneinfo first, falls back to UTC offset."""
     if not name or name.upper() == "UTC":
-        return timezone.utc
+        return _tz.utc
 
     # Try zoneinfo (Python 3.9+)
     try:
@@ -167,7 +170,7 @@ def _get_timezone(name: str):
     upper = name.upper()
     if upper in _offsets:
         hours = _offsets[upper]
-        return timezone(timedelta(hours=hours))
+        return _tz(timedelta(hours=hours))
 
     raise ValueError(
         f"Unknown timezone '{name}'. Use IANA names like 'US/Eastern', "

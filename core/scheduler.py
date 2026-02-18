@@ -38,7 +38,7 @@ from .logging import get_logger
 logger = get_logger("scheduler")
 from dataclasses import dataclass, field, asdict
 
-from .config import _load_config, _save_config
+from .config import config, _load_config, _save_config
 
 
 @dataclass
@@ -84,7 +84,7 @@ class Schedule:
 
     def __post_init__(self):
         if not self.created_at:
-            self.created_at = datetime.now().isoformat()
+            self.created_at = datetime.now(config.tz).isoformat()
         # Deserialize history dicts into ScheduleRun objects
         if self.history and isinstance(self.history[0], dict):
             self.history = [ScheduleRun.from_dict(h) for h in self.history]
@@ -98,7 +98,7 @@ class Schedule:
     def record_run(self, result: str, elapsed_ms: int = 0, is_catchup: bool = False, is_retry: bool = False):
         """Record a run in history and update stats."""
         run = ScheduleRun(
-            timestamp=datetime.now().isoformat(),
+            timestamp=datetime.now(config.tz).isoformat(),
             result=result,
             elapsed_ms=elapsed_ms,
             is_catchup=is_catchup,
@@ -168,7 +168,7 @@ def parse_cron_field(field_str: str, min_val: int, max_val: int) -> set[int]:
 def cron_matches(cron_str: str, dt: datetime = None) -> bool:
     """Check if a cron expression matches the given datetime (default: now)."""
     if dt is None:
-        dt = datetime.now()
+        dt = datetime.now(config.tz)
 
     parts = cron_str.strip().split()
     if len(parts) != 5:
@@ -205,7 +205,7 @@ def next_run(cron_str: str, after: datetime = None, max_search_days: int = 7) ->
     Returns None if no match found within max_search_days.
     """
     if after is None:
-        after = datetime.now()
+        after = datetime.now(config.tz)
 
     # Start from the next minute
     check = after.replace(second=0, microsecond=0)
@@ -431,7 +431,7 @@ class Scheduler:
         """Main scheduler loop — checks every 30 seconds."""
         while self._running:
             try:
-                now = datetime.now()
+                now = datetime.now(config.tz)
 
                 # Only check once per minute
                 current_minute = now.hour * 60 + now.minute
@@ -460,7 +460,7 @@ class Scheduler:
         Only runs the task once (not for every missed minute).
         """
         cfg = _load_config()
-        now = datetime.now()
+        now = datetime.now(config.tz)
         caught_up = 0
 
         for agent_name, agent_cfg in cfg.get("agents", {}).items():
@@ -477,6 +477,9 @@ class Scheduler:
 
                 try:
                     last = datetime.fromisoformat(schedule.last_run)
+                    # Existing timestamps may be naive — assume configured timezone
+                    if last.tzinfo is None:
+                        last = last.replace(tzinfo=config.tz)
                 except (ValueError, TypeError):
                     continue
 
@@ -540,6 +543,8 @@ class Scheduler:
                     if schedule.last_run:
                         try:
                             last = datetime.fromisoformat(schedule.last_run)
+                            if last.tzinfo is None:
+                                last = last.replace(tzinfo=config.tz)
                             if (last.hour == now.hour
                                     and last.minute == now.minute
                                     and last.date() == now.date()):

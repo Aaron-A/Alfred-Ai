@@ -2312,6 +2312,10 @@ def cmd_start(foreground: bool = False, _daemon_child: bool = False, port: int =
             agent = Agent(agent_config)
             return agent.run(task)
 
+        # ── 0. Write PID file (daemon child writes its own for reload restarts) ──
+        if _daemon_child:
+            pid_file.write_text(str(os.getpid()))
+
         # ── 1. Scheduler (background thread) ──
         scheduler = Scheduler(agent_runner=_run_agent_task)
         scheduler.start()
@@ -2320,7 +2324,15 @@ def cmd_start(foreground: bool = False, _daemon_child: bool = False, port: int =
         api_started = False
         try:
             import uvicorn
+            import socket
             from core.api import create_app
+
+            # Wait for port to be free (handles restart overlap)
+            for _attempt in range(10):
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                    if s.connect_ex(("127.0.0.1", port)) != 0:
+                        break  # Port is free
+                import time as _t; _t.sleep(1)
 
             app = create_app()
             uvi_config = uvicorn.Config(

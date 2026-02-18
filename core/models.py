@@ -12,6 +12,7 @@ import json
 import time
 import urllib.request
 import urllib.error
+from datetime import datetime, timezone
 from pathlib import Path
 from .config import config, _load_config
 
@@ -193,7 +194,7 @@ def update_models(provider_id: str = None) -> dict:
             results[pid] = models
             cache[pid] = {
                 "models": models,
-                "updated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+                "updated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             }
         except Exception as e:
             results[pid] = {"error": str(e)}

@@ -646,9 +646,12 @@ class Agent:
 
     @property
     def system_prompt(self) -> str:
-        """Build the full system prompt from workspace files + config."""
-        if self._system_prompt is None:
-            self._system_prompt = self._build_system_prompt()
+        """Build the full system prompt from workspace files + config.
+
+        Re-reads workspace files every time so edits to SOUL.md, AGENTS.md,
+        etc. take effect without restarting the daemon.
+        """
+        self._system_prompt = self._build_system_prompt()
         return self._system_prompt
 
     def _build_system_prompt(self) -> str:
@@ -850,8 +853,11 @@ class Agent:
                 for block in assistant_content:
                     if block.type == "tool_use":
                         tool_call_count += 1
-                        logger.info(f"{self.config.name}: tool {block.name}({json.dumps(block.input)[:80]})")
+                        logger.info(f"{self.config.name}: tool {block.name}({json.dumps(block.input)[:200]})")
                         result = self.registry.execute(block.name, block.input)
+                        # Log errors/failures so they're visible in logs
+                        if result and (result.startswith("Error") or "HTTP 4" in result[:20] or "HTTP 5" in result[:20]):
+                            logger.warning(f"{self.config.name}: tool {block.name} returned: {result[:200]}")
                         tool_results.append({
                             "type": "tool_result",
                             "tool_use_id": block.id,
@@ -936,8 +942,11 @@ class Agent:
                     fn_name = tc["function"]["name"]
                     fn_args = json.loads(tc["function"]["arguments"])
                     tool_call_count += 1
-                    logger.info(f"{self.config.name}: tool {fn_name}({json.dumps(fn_args)[:80]})")
+                    logger.info(f"{self.config.name}: tool {fn_name}({json.dumps(fn_args)[:200]})")
                     tool_result = self.registry.execute(fn_name, fn_args)
+                    # Log errors/failures so they're visible in logs
+                    if tool_result and (tool_result.startswith("Error") or "HTTP 4" in tool_result[:20] or "HTTP 5" in tool_result[:20]):
+                        logger.warning(f"{self.config.name}: tool {fn_name} returned: {tool_result[:200]}")
 
                     messages.append({
                         "role": "tool",
