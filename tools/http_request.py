@@ -11,6 +11,7 @@ import urllib.request
 import urllib.error
 import urllib.parse
 from core.tools import ToolRegistry, ToolParameter
+from core.config import config
 from core.logging import get_logger
 
 logger = get_logger("http_request")
@@ -21,6 +22,23 @@ _BLOCKED_HOSTS = {
     "metadata.google.internal",          # GCP metadata
     "169.254.169.254",                   # AWS/Azure metadata
 }
+
+
+# Service-specific auth header injection
+_SERVICE_AUTH_MAP = {
+    "alpaca": lambda headers, creds: headers.update({
+        "APCA-API-KEY-ID": creds.get("api_key", ""),
+        "APCA-API-SECRET-KEY": creds.get("secret_key", ""),
+    }),
+}
+
+
+def _inject_service_auth(headers: dict, service_name: str, creds: dict):
+    """Inject authentication headers for a known service."""
+    injector = _SERVICE_AUTH_MAP.get(service_name)
+    if injector:
+        injector(headers, creds)
+        logger.debug(f"Auto-injected auth headers for service: {service_name}")
 
 
 def register(registry: ToolRegistry):
@@ -88,6 +106,16 @@ def http_request(
                 return "Error: headers must be a JSON object, e.g. '{\"Key\": \"Value\"}'"
         except json.JSONDecodeError as e:
             return f"Error parsing headers JSON: {e}"
+
+    # Auto-inject auth headers for configured services
+    try:
+        domain_map = config.get_service_domains()
+        if host in domain_map:
+            svc = domain_map[host]
+            svc_name = svc.get("service", "")
+            _inject_service_auth(req_headers, svc_name, svc)
+    except Exception as e:
+        logger.warning(f"Service auth injection failed: {e}")
 
     # Prepare body
     data = None

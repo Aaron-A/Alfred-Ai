@@ -50,9 +50,10 @@ Then `alfred discord setup` auto-discovers your server and channels, and `alfred
 
 ```
 alfred setup                    Interactive setup wizard
-alfred start                    Start Alfred (background daemon)
+alfred start                    Start all services (API + scheduler + Discord)
 alfred start --fg               Start in foreground (Ctrl+C to stop)
-alfred stop                     Stop Alfred
+alfred start --port 8080        Start with API on custom port
+alfred stop                     Stop all services
 alfred status                   Show configuration and running state
 alfred logs                     Tail the log file
 
@@ -87,16 +88,23 @@ alfred tools list <agent>       List tools for a specific agent
 alfred discord setup            Configure Discord bot (token, channels, agents)
 alfred discord status           Show Discord channel mappings
 
-alfred api start               Start API + web dashboard (port 7700)
+alfred api start               Start API only — dev mode (port 7700)
 alfred api start --port 8080   Start on custom port
 ```
 
 ## Web Dashboard
 
-Start the API server and open `http://localhost:7700` in your browser:
+Start Alfred and open `http://localhost:7700` in your browser:
 
 ```bash
-alfred api start
+alfred start           # API + scheduler + Discord (daemon)
+alfred start --fg      # same, but foreground
+```
+
+Or API-only for development:
+
+```bash
+alfred api start       # API only, no scheduler/Discord
 ```
 
 The dashboard shows:

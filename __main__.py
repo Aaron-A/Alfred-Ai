@@ -28,8 +28,15 @@ Commands:
     agent schedule list   - List scheduled tasks
     agent schedule remove - Remove a scheduled task
 
+    service add        - Add credentials for an external service (e.g. alpaca)
+    service list       - Show configured services with masked keys
+    service remove     - Remove a service configuration
+
     discord setup      - Configure Discord bot (token, guild, channel→agent mapping)
     discord status     - Show current Discord configuration
+    discord channel add    - Map a new Discord channel to an agent
+    discord channel remove - Remove a channel mapping
+    discord channel list   - Show current channel→agent mappings
 
     api start          - Start the HTTP API server (default port 7700)
 
@@ -51,9 +58,10 @@ Usage: alfred <command>
 
 Commands:
     setup                               Interactive setup wizard
-    start                               Start Alfred (background daemon)
+    start                               Start all services (API + scheduler + Discord)
     start --fg                          Start in foreground (Ctrl+C to stop)
-    stop                                Stop Alfred
+    start --port 8080                   Start with API on custom port
+    stop                                Stop all services
     status                              Show configuration and running state
     logs                                Tail the log file
 
@@ -87,17 +95,25 @@ Commands:
     tools list [agent_name]             List all registered tools
                                         (omit name for global view, add name for agent-specific)
 
+    service add <name>                  Add credentials for an external service
+    service list                        Show configured services (masked keys)
+    service remove <name>               Remove a service configuration
+
     discord setup                       Configure Discord bot (token, channels, agents)
     discord status                      Show Discord configuration
+    discord channel add                 Map a new channel to an agent
+    discord channel remove              Remove a channel mapping
+    discord channel list                Show channel→agent mappings
 
-    api start [--port PORT]             Start API + web dashboard (default: 7700)
+    api start [--port PORT]             Start API only — dev mode (default: 7700)
 
     demo                                Run the memory layer demo
 
 Examples:
     alfred setup                                    # First-time setup
-    alfred start                                    # Start Alfred (Discord bot, etc.)
-    alfred stop                                     # Stop Alfred
+    alfred start                                    # Start all services (API, scheduler, Discord)
+    alfred start --fg                               # Start in foreground (Ctrl+C to stop)
+    alfred stop                                     # Stop all services
     alfred status                                   # Check what's running
     alfred logs                                     # Watch the log
     alfred provider add anthropic                   # Add Claude as a provider
@@ -195,6 +211,15 @@ def cmd_status():
 
     # Memory
     table.add_row("Vector Store", "LanceDB", "[green]data/lancedb/[/]")
+
+    # API server
+    import socket
+    api_port = 7700
+    try:
+        with socket.create_connection(("localhost", api_port), timeout=1):
+            table.add_row("API Server", f"port {api_port}", f"[bold green]listening[/]  →  http://localhost:{api_port}")
+    except (ConnectionRefusedError, OSError):
+        table.add_row("API Server", f"port {api_port}", "[dim]not running[/]")
 
     # Discord
     discord_cfg = cfg.get("discord", {})
@@ -1451,6 +1476,168 @@ def _cmd_provider_add_brave(console, cfg):
     console.print()
 
 
+# ─── Service Commands ────────────────────────────────────────────
+
+def cmd_service_list():
+    """List all configured external services with masked keys."""
+    from rich.console import Console
+    from rich.table import Table
+    from rich import box
+    from core.config import CONFIG_FILE, _load_config
+
+    console = Console()
+
+    if not CONFIG_FILE.exists():
+        console.print("\n  [yellow]Run 'alfred setup' first.[/]\n")
+        return
+
+    cfg = _load_config()
+    services = cfg.get("services", {})
+
+    if not services:
+        console.print("\n  [dim]No services configured.[/]")
+        console.print("  Add one with: [cyan]alfred service add <name>[/]\n")
+        return
+
+    console.print()
+    table = Table(
+        title="Configured Services",
+        box=box.ROUNDED,
+        title_style="bold white",
+    )
+    table.add_column("Service", style="cyan bold")
+    table.add_column("API Key", style="dim")
+    table.add_column("Secret Key", style="dim")
+    table.add_column("Domains", style="white")
+
+    for name, svc_cfg in services.items():
+        # Mask keys
+        api_key = svc_cfg.get("api_key", "")
+        secret_key = svc_cfg.get("secret_key", "")
+        masked_api = (api_key[:4] + "..." + api_key[-4:]) if len(api_key) > 8 else ("***" if api_key else "—")
+        masked_secret = (secret_key[:4] + "..." + secret_key[-4:]) if len(secret_key) > 8 else ("***" if secret_key else "—")
+
+        # Collect domains
+        domains = []
+        for key, val in svc_cfg.items():
+            if isinstance(val, str) and val.startswith("http"):
+                try:
+                    from urllib.parse import urlparse
+                    host = urlparse(val).hostname
+                    if host:
+                        domains.append(host)
+                except Exception:
+                    pass
+
+        table.add_row(name, masked_api, masked_secret, "\n".join(domains) if domains else "—")
+
+    console.print(table)
+    console.print()
+
+
+def cmd_service_add(name: str):
+    """Add or update credentials for an external service."""
+    from rich.console import Console
+    from rich.prompt import Prompt
+    from rich.rule import Rule
+    from core.config import CONFIG_FILE, _load_config, _save_config
+
+    console = Console()
+
+    if not CONFIG_FILE.exists():
+        console.print("\n  [yellow]Run 'alfred setup' first.[/]\n")
+        return
+
+    cfg = _load_config()
+    console.print()
+    console.print(Rule(f"[bold]Add Service: {name}", style="cyan"))
+    console.print()
+
+    # Check if already exists
+    existing = cfg.get("services", {}).get(name, {})
+    if existing:
+        masked = existing.get("api_key", "")
+        if len(masked) > 8:
+            masked = masked[:4] + "..." + masked[-4:]
+        console.print(f"  [yellow]Service '{name}' already configured (key: {masked})[/]")
+        overwrite = Prompt.ask("  Overwrite?", choices=["y", "n"], default="n")
+        if overwrite != "y":
+            console.print("  [dim]Cancelled.[/]\n")
+            return
+        console.print()
+
+    service_entry = {}
+
+    # API Key
+    api_key = Prompt.ask("  API Key")
+    if api_key.strip():
+        service_entry["api_key"] = api_key.strip()
+
+    # Secret Key (optional)
+    secret_key = Prompt.ask("  Secret Key (optional, press Enter to skip)", default="")
+    if secret_key.strip():
+        service_entry["secret_key"] = secret_key.strip()
+
+    # Base URL
+    base_url = Prompt.ask("  Base URL (e.g. https://api.example.com)")
+    if base_url.strip():
+        service_entry["base_url"] = base_url.strip()
+
+    # Additional data URL (optional)
+    data_url = Prompt.ask("  Data URL (optional, press Enter to skip)", default="")
+    if data_url.strip():
+        service_entry["data_url"] = data_url.strip()
+
+    if not service_entry:
+        console.print("  [yellow]No credentials provided. Cancelled.[/]\n")
+        return
+
+    # Save
+    if "services" not in cfg:
+        cfg["services"] = {}
+    cfg["services"][name] = service_entry
+    _save_config(cfg)
+
+    console.print(f"\n  [bold green]Service '{name}' added![/]")
+    console.print(f"  Auth headers will be auto-injected for requests to configured domains.")
+
+    # Remind about auth handler
+    console.print(f"\n  [dim]Note: If this service needs custom auth headers, add a handler to[/]")
+    console.print(f"  [dim]tools/http_request.py in _SERVICE_AUTH_MAP.[/]\n")
+
+
+def cmd_service_remove(name: str):
+    """Remove an external service configuration."""
+    from rich.console import Console
+    from rich.prompt import Prompt
+    from core.config import CONFIG_FILE, _load_config, _save_config
+
+    console = Console()
+
+    if not CONFIG_FILE.exists():
+        console.print("\n  [yellow]Run 'alfred setup' first.[/]\n")
+        return
+
+    cfg = _load_config()
+    services = cfg.get("services", {})
+
+    if name not in services:
+        console.print(f"\n  [red]Service '{name}' not found.[/]")
+        if services:
+            console.print(f"  Available: {', '.join(services.keys())}")
+        console.print()
+        return
+
+    confirm = Prompt.ask(f"  Remove service '{name}'?", choices=["y", "n"], default="n")
+    if confirm != "y":
+        console.print("  [dim]Cancelled.[/]\n")
+        return
+
+    del cfg["services"][name]
+    _save_config(cfg)
+    console.print(f"\n  [green]Service '{name}' removed.[/]\n")
+
+
 def cmd_demo():
     import demo
     demo.main()
@@ -2062,10 +2249,11 @@ def cmd_discord_setup():
     console.print(f"  Start it: [bold]alfred discord start[/]\n")
 
 
-def cmd_start(foreground: bool = False, _daemon_child: bool = False):
-    """Start Alfred — launches all configured services (Discord bot, etc.)."""
+def cmd_start(foreground: bool = False, _daemon_child: bool = False, port: int = 7700):
+    """Start Alfred — launches all services (API + scheduler + Discord)."""
     import json
     import subprocess
+    import threading
     from pathlib import Path
     from rich.console import Console
 
@@ -2083,11 +2271,6 @@ def cmd_start(foreground: bool = False, _daemon_child: bool = False):
     discord_cfg = cfg.get("discord", {})
     has_discord = discord_cfg.get("bot_token") and discord_cfg.get("channels")
 
-    if not has_discord:
-        console.print("\n  [yellow]Nothing to start.[/]")
-        console.print("  Set up Discord first: [bold]alfred discord setup[/]\n")
-        return
-
     # Check PID file (skip if we ARE the daemon child)
     pid_file = Path(__file__).parent / "data" / "discord.pid"
     if not _daemon_child and pid_file.exists():
@@ -2102,12 +2285,10 @@ def cmd_start(foreground: bool = False, _daemon_child: bool = False):
 
     if foreground or _daemon_child:
         # Direct run — import and start services
-        from core.discord import DiscordBot
-
-        # Start the scheduler (background thread — runs cron tasks on agents)
         from core.scheduler import Scheduler
         from core.agent import Agent, AgentConfig
         from core.config import _load_config as _reload_config
+        from core.logging import setup_logging
         from pathlib import Path as _Path
 
         def _run_agent_task(agent_name: str, task: str) -> str:
@@ -2131,20 +2312,87 @@ def cmd_start(foreground: bool = False, _daemon_child: bool = False):
             agent = Agent(agent_config)
             return agent.run(task)
 
+        # ── 1. Scheduler (background thread) ──
         scheduler = Scheduler(agent_runner=_run_agent_task)
         scheduler.start()
 
-        bot = DiscordBot()
-
-        if not _daemon_child:
-            channels = discord_cfg.get("channels", {})
-            channel_list = ", ".join(f"#{c.get('name', '?')}" for c in channels.values())
-            console.print(f"\n  Discord: {channel_list}\n")
-
+        # ── 2. API server (daemon thread) ──
+        api_started = False
         try:
-            bot.run(foreground=not _daemon_child)
-        finally:
-            scheduler.stop()
+            import uvicorn
+            from core.api import create_app
+
+            app = create_app()
+            uvi_config = uvicorn.Config(
+                app, host="0.0.0.0", port=port,
+                log_level="warning" if _daemon_child else "info",
+            )
+            server = uvicorn.Server(uvi_config)
+            api_thread = threading.Thread(target=server.run, daemon=True, name="api-server")
+            api_thread.start()
+            api_started = True
+        except ImportError:
+            pass  # uvicorn not installed — skip API
+
+        # ── 3. Main blocking service ──
+        if has_discord:
+            from core.discord import DiscordBot
+
+            bot = DiscordBot()
+
+            if not _daemon_child:
+                services = []
+                if api_started:
+                    services.append(f"API on [bold]http://localhost:{port}[/]")
+                channels = discord_cfg.get("channels", {})
+                channel_list = ", ".join(f"#{c.get('name', '?')}" for c in channels.values())
+                services.append(f"Discord ({channel_list})")
+                services.append("Scheduler")
+                console.print()
+                for s in services:
+                    console.print(f"  [green]✓[/] {s}")
+                console.print(f"\n  Press Ctrl+C to stop.\n")
+
+            try:
+                bot.run(foreground=not _daemon_child)
+            finally:
+                scheduler.stop()
+        else:
+            # No Discord — API + Scheduler only. Block on signal.
+            import signal as _signal
+
+            if not _daemon_child:
+                services = []
+                if api_started:
+                    services.append(f"API on [bold]http://localhost:{port}[/]")
+                services.append("Scheduler")
+                console.print()
+                for s in services:
+                    console.print(f"  [green]✓[/] {s}")
+                console.print(f"\n  [dim]Discord not configured — run: alfred discord setup[/]")
+                console.print(f"  Press Ctrl+C to stop.\n")
+
+            # Write PID file so 'alfred stop' can find us
+            data_dir = Path(__file__).parent / "data"
+            data_dir.mkdir(parents=True, exist_ok=True)
+            _pid_file = data_dir / "discord.pid"
+            _pid_file.write_text(str(os.getpid()))
+
+            def _shutdown(signum, frame):
+                raise SystemExit(0)
+
+            _signal.signal(_signal.SIGTERM, _shutdown)
+            _signal.signal(_signal.SIGINT, _shutdown)
+
+            try:
+                while True:
+                    _signal.pause()
+            except (SystemExit, KeyboardInterrupt):
+                if not _daemon_child:
+                    console.print("\n  Shutting down...")
+            finally:
+                _pid_file.unlink(missing_ok=True)
+                scheduler.stop()
     else:
         # Daemon mode — spawn a clean subprocess (lancedb is not fork-safe)
         data_dir = Path(__file__).parent / "data"
@@ -2154,9 +2402,14 @@ def cmd_start(foreground: bool = False, _daemon_child: bool = False):
         # Find the alfred launcher script
         alfred_script = Path(__file__).parent / "alfred"
 
+        # Pass --port through to daemon child
+        daemon_args = [str(alfred_script), "start", "--daemon-child"]
+        if port != 7700:
+            daemon_args += ["--port", str(port)]
+
         lf = open(log_file, "a")
         proc = subprocess.Popen(
-            [str(alfred_script), "start", "--daemon-child"],
+            daemon_args,
             stdout=lf,
             stderr=lf,
             stdin=subprocess.DEVNULL,
@@ -2168,6 +2421,7 @@ def cmd_start(foreground: bool = False, _daemon_child: bool = False):
         pid_file.write_text(str(proc.pid))
 
         console.print(f"\n  Alfred started (PID {proc.pid})")
+        console.print(f"  API:    [bold]http://localhost:{port}[/]")
         console.print(f"  Logs:   alfred logs")
         console.print(f"  Status: alfred status")
         console.print(f"  Stop:   alfred stop\n")
@@ -2275,6 +2529,222 @@ def cmd_discord_status():
     console.print(f"  [dim](edit discord.rate_limit in alfred.json to customize)[/]")
 
     console.print(f"\n  [dim]Reconfigure: alfred discord setup[/]\n")
+
+
+def cmd_discord_channel_add():
+    """Map a Discord channel to an agent."""
+    from rich.console import Console
+    from rich.prompt import Prompt, Confirm
+    from rich.rule import Rule
+    from core.config import CONFIG_FILE, _load_config, _save_config
+
+    console = Console()
+
+    if not CONFIG_FILE.exists():
+        console.print("\n  [yellow]Run 'alfred setup' first.[/]\n")
+        return
+
+    cfg = _load_config()
+    discord_cfg = cfg.get("discord", {})
+    token = discord_cfg.get("bot_token", "")
+    guild_id = discord_cfg.get("guild_id", "")
+
+    if not token or not guild_id:
+        console.print("\n  [yellow]Discord not configured yet.[/]")
+        console.print("  Run: [bold]alfred discord setup[/]\n")
+        return
+
+    agents = cfg.get("agents", {})
+    agent_names = list(agents.keys())
+
+    if not agent_names:
+        console.print("\n  [yellow]No agents configured.[/]")
+        console.print("  Create one first: [bold]alfred agent create <name>[/]\n")
+        return
+
+    console.print()
+    console.print(Rule("[bold]Add Channel Mapping", style="cyan"))
+    console.print()
+
+    # Discover channels from Discord
+    console.print("  [dim]Connecting to Discord...[/]")
+    discovery = _discord_discover(token, guild_id)
+    channels = discovery.get("channels", [])
+
+    if not channels:
+        console.print("  [red]No text channels found in the guild.[/]\n")
+        return
+
+    # Filter to unmapped channels only
+    existing_ids = set(discord_cfg.get("channels", {}).keys())
+    unmapped = [ch for ch in channels if ch["id"] not in existing_ids]
+
+    if not unmapped:
+        console.print("  [yellow]All channels are already mapped![/]")
+        console.print("  Create a new channel in Discord, or remove an existing mapping first.")
+        console.print("  Run: [bold]alfred discord channel remove[/]\n")
+        return
+
+    console.print(f"  Found {len(unmapped)} unmapped channel(s):\n")
+
+    for i, ch in enumerate(unmapped, 1):
+        cat_str = f" [dim][{ch['category']}][/]" if ch.get("category") else ""
+        console.print(f"    [cyan]{i}.[/] #{ch['name']}{cat_str}")
+
+    console.print()
+    choice = Prompt.ask("  Select channel", default="1")
+    idx = int(choice) - 1 if choice.isdigit() else 0
+    idx = max(0, min(idx, len(unmapped) - 1))
+    selected = unmapped[idx]
+    console.print(f"  Selected: [bold]#{selected['name']}[/]")
+
+    # Agent selection
+    console.print()
+    if len(agent_names) == 1:
+        agent_name = agent_names[0]
+        desc = agents[agent_name].get("description", "")
+        console.print(f"  Agent: [bold]{agent_name}[/]  [dim]{desc}[/]")
+        if not Confirm.ask("  Use this agent?", default=True):
+            console.print("  [dim]Cancelled.[/]\n")
+            return
+    else:
+        console.print("  Available agents:")
+        for i, aname in enumerate(agent_names, 1):
+            desc = agents[aname].get("description", "")
+            console.print(f"    [cyan]{i}.[/] {aname}  [dim]{desc}[/]")
+        console.print()
+        choice = Prompt.ask("  Select agent", default="1")
+        if choice.isdigit():
+            aidx = int(choice) - 1
+            if 0 <= aidx < len(agent_names):
+                agent_name = agent_names[aidx]
+            else:
+                console.print("  [red]Invalid selection.[/]\n")
+                return
+        elif choice in agent_names:
+            agent_name = choice
+        else:
+            console.print("  [red]Unknown agent.[/]\n")
+            return
+
+    require_mention = Confirm.ask("  Require @mention?", default=False)
+
+    # Save
+    if "channels" not in cfg["discord"]:
+        cfg["discord"]["channels"] = {}
+
+    cfg["discord"]["channels"][selected["id"]] = {
+        "name": selected["name"],
+        "agent": agent_name,
+        "require_mention": require_mention,
+    }
+    _save_config(cfg)
+
+    mode = "@mention only" if require_mention else "all messages"
+    console.print(f"\n  [bold green]Channel mapped![/]")
+    console.print(f"  #{selected['name']} → {agent_name} ({mode})")
+    console.print(f"\n  [dim]Restart alfred for changes to take effect.[/]\n")
+
+
+def cmd_discord_channel_remove():
+    """Remove a Discord channel-to-agent mapping."""
+    from rich.console import Console
+    from rich.prompt import Prompt, Confirm
+    from rich.rule import Rule
+    from core.config import CONFIG_FILE, _load_config, _save_config
+
+    console = Console()
+
+    if not CONFIG_FILE.exists():
+        console.print("\n  [yellow]Run 'alfred setup' first.[/]\n")
+        return
+
+    cfg = _load_config()
+    discord_cfg = cfg.get("discord", {})
+
+    if not discord_cfg.get("bot_token"):
+        console.print("\n  [yellow]Discord not configured yet.[/]")
+        console.print("  Run: [bold]alfred discord setup[/]\n")
+        return
+
+    channels = discord_cfg.get("channels", {})
+    if not channels:
+        console.print("\n  [yellow]No channel mappings to remove.[/]")
+        console.print("  Run: [bold]alfred discord channel add[/]\n")
+        return
+
+    console.print()
+    console.print(Rule("[bold]Remove Channel Mapping", style="cyan"))
+    console.print()
+
+    channel_list = list(channels.items())
+    for i, (ch_id, ch_cfg) in enumerate(channel_list, 1):
+        mode = "@mention only" if ch_cfg.get("require_mention", True) else "all messages"
+        console.print(f"    [cyan]{i}.[/] #{ch_cfg.get('name', '?')} → {ch_cfg.get('agent', '?')} ({mode})")
+
+    console.print()
+    choice = Prompt.ask("  Select channel to remove", default="1")
+    idx = int(choice) - 1 if choice.isdigit() else 0
+    idx = max(0, min(idx, len(channel_list) - 1))
+    ch_id, ch_cfg = channel_list[idx]
+
+    console.print(f"\n  Remove [bold]#{ch_cfg.get('name', '?')}[/] → {ch_cfg.get('agent', '?')}?")
+    if not Confirm.ask("  Confirm?", default=True):
+        console.print("  [dim]Cancelled.[/]\n")
+        return
+
+    del cfg["discord"]["channels"][ch_id]
+    _save_config(cfg)
+
+    console.print(f"\n  [green]Channel mapping removed.[/]")
+    console.print(f"\n  [dim]Restart alfred for changes to take effect.[/]\n")
+
+
+def cmd_discord_channel_list():
+    """Show current Discord channel-to-agent mappings."""
+    from rich.console import Console
+    from rich.table import Table
+    from rich import box
+    from core.config import CONFIG_FILE, _load_config
+
+    console = Console()
+
+    if not CONFIG_FILE.exists():
+        console.print("\n  [yellow]Run 'alfred setup' first.[/]\n")
+        return
+
+    cfg = _load_config()
+    discord_cfg = cfg.get("discord", {})
+
+    if not discord_cfg.get("bot_token"):
+        console.print("\n  [yellow]Discord not configured yet.[/]")
+        console.print("  Run: [bold]alfred discord setup[/]\n")
+        return
+
+    channels = discord_cfg.get("channels", {})
+    if not channels:
+        console.print("\n  [dim]No channel mappings configured.[/]")
+        console.print("  Run: [bold]alfred discord channel add[/]\n")
+        return
+
+    console.print()
+    table = Table(box=box.ROUNDED, title="Channel → Agent Mappings", title_style="bold cyan")
+    table.add_column("Channel", style="bold")
+    table.add_column("Channel ID", style="dim")
+    table.add_column("Agent", style="cyan")
+    table.add_column("Mode")
+
+    for ch_id, ch_cfg in channels.items():
+        mode = "@mention only" if ch_cfg.get("require_mention", True) else "all messages"
+        table.add_row(
+            f"#{ch_cfg.get('name', '?')}",
+            ch_id,
+            ch_cfg.get("agent", "?"),
+            mode,
+        )
+
+    console.print(table)
+    console.print()
 
 
 # ─── Main Router ─────────────────────────────────────────────────
@@ -2418,6 +2888,31 @@ def main():
             print("Available: add")
         return
 
+    # Handle 'service' subcommands
+    if command == "service":
+        if len(sys.argv) < 3:
+            print("Usage: alfred service <add|list|remove> [name]")
+            return
+
+        subcmd = sys.argv[2].lower()
+
+        if subcmd == "list":
+            cmd_service_list()
+        elif subcmd == "add":
+            if len(sys.argv) < 4:
+                print("Usage: alfred service add <name>")
+                return
+            cmd_service_add(sys.argv[3])
+        elif subcmd == "remove":
+            if len(sys.argv) < 4:
+                print("Usage: alfred service remove <name>")
+                return
+            cmd_service_remove(sys.argv[3])
+        else:
+            print(f"Unknown service command: {subcmd}")
+            print("Available: add, list, remove")
+        return
+
     # Handle 'tools' subcommands
     if command == "tools":
         if len(sys.argv) < 3:
@@ -2455,7 +2950,15 @@ def main():
     if command == "start":
         foreground = "--fg" in sys.argv[2:] or "--foreground" in sys.argv[2:]
         daemon_child = "--daemon-child" in sys.argv[2:]
-        cmd_start(foreground=foreground, _daemon_child=daemon_child)
+        port = 7700
+        args = sys.argv[2:]
+        for i, arg in enumerate(args):
+            if arg == "--port" and i + 1 < len(args):
+                try:
+                    port = int(args[i + 1])
+                except ValueError:
+                    pass
+        cmd_start(foreground=foreground, _daemon_child=daemon_child, port=port)
         return
 
     # Handle 'stop' command
@@ -2495,7 +2998,7 @@ def main():
     # Handle 'discord' subcommands
     if command == "discord":
         if len(sys.argv) < 3:
-            print("Usage: alfred discord <setup|status>")
+            print("Usage: alfred discord <setup|status|channel> ...")
             return
 
         subcmd = sys.argv[2].lower()
@@ -2504,9 +3007,23 @@ def main():
             cmd_discord_setup()
         elif subcmd == "status":
             cmd_discord_status()
+        elif subcmd == "channel":
+            if len(sys.argv) < 4:
+                print("Usage: alfred discord channel <add|remove|list>")
+                return
+            channel_cmd = sys.argv[3].lower()
+            if channel_cmd == "add":
+                cmd_discord_channel_add()
+            elif channel_cmd == "remove":
+                cmd_discord_channel_remove()
+            elif channel_cmd == "list":
+                cmd_discord_channel_list()
+            else:
+                print(f"Unknown discord channel command: {channel_cmd}")
+                print("Available: add, remove, list")
         else:
             print(f"Unknown discord command: {subcmd}")
-            print("Available: setup, status")
+            print("Available: setup, status, channel")
         return
 
     # Handle 'session' subcommands

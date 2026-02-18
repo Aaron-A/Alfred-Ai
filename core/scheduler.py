@@ -241,11 +241,20 @@ def describe_cron(cron_str: str) -> str:
 
     time_str = ""
     if minute != "*" and hour != "*":
-        time_str = f"{int(hour):02d}:{int(minute):02d}"
+        # Handle hour ranges like "10-15"
+        if "-" in hour and not hour.startswith("*/"):
+            h_start, h_end = hour.split("-", 1)
+            time_str = f":{int(minute):02d} {h_start}-{h_end}h"
+        elif hour.isdigit() and minute.isdigit():
+            time_str = f"{int(hour):02d}:{int(minute):02d}"
+        else:
+            time_str = f"{hour}:{minute}"
     elif minute.startswith("*/"):
         time_str = f"every {minute[2:]} min"
     elif hour.startswith("*/"):
         time_str = f"every {hour[2:]} hr"
+    elif minute != "*" and hour == "*":
+        time_str = f":{int(minute):02d} every hour" if minute.isdigit() else f":{minute} every hour"
 
     dow_desc = dow_names.get(dow, dow)
 

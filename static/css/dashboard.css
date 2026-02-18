@@ -322,6 +322,53 @@ body {
 }
 
 /* ═══════════════════════════════════════
+   SECTION TITLES
+   ═══════════════════════════════════════ */
+
+.section-title {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 12px;
+}
+
+/* ═══════════════════════════════════════
+   PERIOD SELECTOR
+   ═══════════════════════════════════════ */
+
+.period-bar {
+  display: flex;
+  align-items: center;
+  margin-bottom: 20px;
+}
+
+.period-select {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 6px 12px;
+  cursor: pointer;
+  transition: var(--transition);
+  outline: none;
+  -webkit-appearance: none;
+  appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23888'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  padding-right: 28px;
+}
+
+.period-select:hover { border-color: var(--border-light); }
+.period-select:focus { border-color: var(--accent); }
+.period-select option { background: #111; color: var(--text); }
+
+/* ═══════════════════════════════════════
    METRIC CARDS (for Metrics tab)
    ═══════════════════════════════════════ */
 

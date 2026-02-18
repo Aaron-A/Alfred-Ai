@@ -127,6 +127,67 @@ class Config:
             return providers[provider]["model"]
         return self.DEFAULT_MODELS.get(provider, "")
 
+    def get_service_credentials(self, service: str) -> dict:
+        """
+        Get credentials for an external service (non-LLM APIs).
+
+        Resolution order:
+          1. alfred.json services.<name> section
+          2. Environment variables: <SERVICE>_API_KEY, <SERVICE>_SECRET_KEY, etc.
+
+        Returns dict with whatever keys are configured (api_key, secret_key,
+        base_url, data_url, etc.), or empty dict if not found.
+        """
+        cfg = _load_config()
+
+        # Check alfred.json first
+        services = cfg.get("services", {})
+        if service in services:
+            return dict(services[service])
+
+        # Fall back to environment variables
+        prefix = service.upper()
+        result = {}
+        env_mappings = {
+            "api_key": f"{prefix}_API_KEY",
+            "secret_key": f"{prefix}_SECRET_KEY",
+            "base_url": f"{prefix}_BASE_URL",
+            "data_url": f"{prefix}_DATA_URL",
+        }
+        for key, env_var in env_mappings.items():
+            val = os.getenv(env_var, "")
+            if val:
+                result[key] = val
+
+        return result
+
+    def get_service_domains(self) -> dict[str, dict]:
+        """
+        Build a domain→service mapping for auto-injection.
+
+        Returns dict like:
+          {"paper-api.alpaca.markets": {"service": "alpaca", ...creds...},
+           "data.alpaca.markets": {"service": "alpaca", ...creds...}}
+        """
+        cfg = _load_config()
+        services = cfg.get("services", {})
+        domain_map = {}
+
+        for name, svc_cfg in services.items():
+            creds = self.get_service_credentials(name)
+            # Extract domains from any URL fields
+            for key, val in svc_cfg.items():
+                if key.endswith("_url") or key == "base_url":
+                    try:
+                        from urllib.parse import urlparse
+                        host = urlparse(val).hostname
+                        if host:
+                            domain_map[host] = {"service": name, **creds}
+                    except Exception:
+                        pass
+
+        return domain_map
+
     def get_agent_llm(self, agent_name: str) -> tuple[str, str]:
         """
         Get the provider and model for a specific agent.

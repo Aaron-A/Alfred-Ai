@@ -141,30 +141,81 @@ class AgentMetrics:
             "last_activity": None,
             "recent_errors": [],  # Last 10 errors
         })
+        # Per-model rollup — keyed by "provider/model"
+        self._by_model: dict[str, dict] = defaultdict(lambda: {
+            "messages": 0,
+            "tool_calls": 0,
+            "errors": 0,
+            "total_elapsed_ms": 0,
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "last_activity": None,
+        })
+
+        # Persistent storage — writes every event to SQLite
+        try:
+            from .metrics_store import MetricsStore
+            self._store = MetricsStore()
+        except Exception:
+            self._store = None
 
     def record_message(self, agent_name: str, elapsed_ms: int = 0,
                        tool_calls: int = 0,
-                       input_tokens: int = 0, output_tokens: int = 0):
+                       input_tokens: int = 0, output_tokens: int = 0,
+                       provider: str = "", model: str = ""):
         """Record a successful agent interaction."""
+        now = datetime.now(timezone.utc).isoformat()
+
+        # Per-agent
         d = self._data[agent_name]
         d["messages"] += 1
         d["tool_calls"] += tool_calls
         d["total_elapsed_ms"] += elapsed_ms
         d["input_tokens"] += input_tokens
         d["output_tokens"] += output_tokens
-        d["last_activity"] = datetime.now(timezone.utc).isoformat()
+        d["last_activity"] = now
 
-    def record_error(self, agent_name: str, error: str):
+        # Per-model
+        if provider and model:
+            model_key = f"{provider}/{model}"
+            m = self._by_model[model_key]
+            m["messages"] += 1
+            m["tool_calls"] += tool_calls
+            m["total_elapsed_ms"] += elapsed_ms
+            m["input_tokens"] += input_tokens
+            m["output_tokens"] += output_tokens
+            m["last_activity"] = now
+
+        # Persist to SQLite
+        if self._store:
+            self._store.record(agent_name, provider, model,
+                               elapsed_ms, tool_calls,
+                               input_tokens, output_tokens)
+
+    def record_error(self, agent_name: str, error: str,
+                     provider: str = "", model: str = ""):
         """Record an agent error."""
+        now = datetime.now(timezone.utc).isoformat()
+
         d = self._data[agent_name]
         d["errors"] += 1
-        d["last_activity"] = datetime.now(timezone.utc).isoformat()
+        d["last_activity"] = now
         d["recent_errors"].append({
             "error": error[:500],
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": now,
         })
         # Keep only last 10
         d["recent_errors"] = d["recent_errors"][-10:]
+
+        # Per-model
+        if provider and model:
+            model_key = f"{provider}/{model}"
+            self._by_model[model_key]["errors"] += 1
+            self._by_model[model_key]["last_activity"] = now
+
+        # Persist to SQLite
+        if self._store:
+            self._store.record_error(agent_name, provider, model, error)
 
     def summary(self, agent_name: str = None) -> dict:
         """
@@ -192,11 +243,31 @@ class AgentMetrics:
             for name in sorted(self._data.keys())
         }
 
+    def model_summary(self) -> dict:
+        """
+        Get per-model metrics summary.
+
+        Returns:
+            Dict keyed by "provider/model" with same shape as agent metrics.
+        """
+        result = {}
+        for model_key in sorted(self._by_model.keys()):
+            m = self._by_model[model_key]
+            entry = dict(m)
+            if m["messages"] > 0:
+                entry["avg_ms"] = m["total_elapsed_ms"] // m["messages"]
+            else:
+                entry["avg_ms"] = 0
+            entry["total_tokens"] = m["input_tokens"] + m["output_tokens"]
+            result[model_key] = entry
+        return result
+
     def snapshot(self) -> dict:
         """Get a JSON-serializable snapshot of all metrics."""
         return {
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "agents": self.summary(),
+            "models": self.model_summary(),
         }
 
     def save_snapshot(self, path: Path = None):

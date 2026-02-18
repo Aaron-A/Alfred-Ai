@@ -565,11 +565,24 @@ def create_app() -> FastAPI:
     # ─── Metrics ──────────────────────────────────────────
 
     @app.get("/v1/metrics")
-    async def get_metrics(agent: str = None):
-        """Get agent activity metrics (session-scoped)."""
-        if agent:
-            return {"agent": agent, "metrics": metrics.summary(agent)}
-        return metrics.snapshot()
+    async def get_metrics(agent: str = None, period: str = "session"):
+        """
+        Get agent activity metrics.
+
+        Args:
+            agent: Filter to a specific agent
+            period: session (current in-memory), day, week, month, year, all
+        """
+        if period == "session":
+            # Existing behavior — current in-memory snapshot
+            if agent:
+                return {"agent": agent, "metrics": metrics.summary(agent)}
+            return metrics.snapshot()
+
+        # Time-series query from SQLite
+        from .metrics_store import MetricsStore
+        store = MetricsStore()
+        return store.query(period=period, agent=agent)
 
     # ─── Webhooks ─────────────────────────────────────────
 

@@ -31,10 +31,14 @@ async function fetchJSON(path) {
 // ─── Data Fetching ────────────────────────────────
 
 async function refreshData() {
+  // Read selected period from the Metrics tab dropdown
+  const period = document.getElementById('metricsPeriod')?.value || 'session';
+  const metricsUrl = '/v1/metrics' + (period !== 'session' ? '?period=' + period : '');
+
   const [status, agentsData, metricsData] = await Promise.all([
     fetchJSON('/v1/status'),
     fetchJSON('/v1/agents'),
-    fetchJSON('/v1/metrics'),
+    fetchJSON(metricsUrl),
   ]);
 
   state.status = status;
@@ -365,12 +369,49 @@ function renderMetricsCards() {
   grid.innerHTML = html;
 }
 
+// ─── Render: Models Table ─────────────────────────
+
+function renderModelsTable() {
+  const tbody = document.getElementById('modelsBody');
+  const models = state.metrics?.models || {};
+
+  if (!Object.keys(models).length) {
+    tbody.innerHTML = '<tr><td colspan="8" class="empty-state">No model metrics yet. Send some messages first.</td></tr>';
+    return;
+  }
+
+  let html = '';
+  for (const [key, m] of Object.entries(models)) {
+    // key is "provider/model"
+    const slashIdx = key.indexOf('/');
+    const provider = slashIdx > -1 ? key.slice(0, slashIdx) : key;
+    const model = slashIdx > -1 ? key.slice(slashIdx + 1) : '';
+    const modelShort = model.length > 30 ? model.slice(0, 27) + '...' : model;
+    const totalTokens = (m.input_tokens || 0) + (m.output_tokens || 0);
+    const avgMs = m.messages > 0 ? Math.round((m.total_elapsed_ms || 0) / m.messages) : 0;
+
+    html += `<tr>
+      <td style="color:var(--cyan);">${escHtml(provider)}</td>
+      <td class="fw-600" style="color:#fff;">${escHtml(modelShort)}</td>
+      <td>${fmtNum(m.messages || 0)}</td>
+      <td>${fmtTokens(m.input_tokens || 0)}</td>
+      <td>${fmtTokens(m.output_tokens || 0)}</td>
+      <td class="fw-600">${fmtTokens(totalTokens)}</td>
+      <td>${fmtMs(avgMs)}</td>
+      <td>${m.errors ? '<span class="text-red">' + m.errors + '</span>' : '<span class="text-dim">0</span>'}</td>
+    </tr>`;
+  }
+
+  tbody.innerHTML = html;
+}
+
 // ─── Render All ───────────────────────────────────
 
 function renderAll() {
   renderStats();
   renderAgentsTable();
   renderSchedulesTable();
+  renderModelsTable();
   renderMetricsCards();
 }
 
@@ -405,4 +446,10 @@ document.addEventListener('DOMContentLoaded', () => {
   initTabs();
   refreshData();
   setInterval(refreshData, REFRESH_INTERVAL);
+
+  // Period selector triggers immediate refresh
+  const periodSelect = document.getElementById('metricsPeriod');
+  if (periodSelect) {
+    periodSelect.addEventListener('change', () => refreshData());
+  }
 });

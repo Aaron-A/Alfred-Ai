@@ -107,6 +107,41 @@
 
 <!-- ═════════ METRICS TAB ═════════ -->
 <div class="tab-panel" id="tab-metrics">
+
+  <!-- Period selector -->
+  <div class="period-bar">
+    <select id="metricsPeriod" class="period-select">
+      <option value="session">Current Session</option>
+      <option value="day">Last 24 Hours</option>
+      <option value="week">Last 7 Days</option>
+      <option value="month">Last 30 Days</option>
+      <option value="year">Last Year</option>
+      <option value="all">All Time</option>
+    </select>
+  </div>
+
+  <!-- Models breakdown -->
+  <div class="section-title">BY MODEL</div>
+  <table class="data-table" id="modelsTable">
+    <thead>
+      <tr>
+        <th>Provider</th>
+        <th>Model</th>
+        <th>Messages</th>
+        <th>Input Tokens</th>
+        <th>Output Tokens</th>
+        <th>Total Tokens</th>
+        <th>Avg Response</th>
+        <th>Errors</th>
+      </tr>
+    </thead>
+    <tbody id="modelsBody">
+      <tr><td colspan="8" class="text-dim" style="text-align:center;padding:24px;">Loading...</td></tr>
+    </tbody>
+  </table>
+
+  <!-- Per-agent detail cards -->
+  <div class="section-title" style="margin-top:28px;">BY AGENT</div>
   <div class="metrics-grid" id="metricsGrid">
     <div class="empty-state">
       <div class="empty-state-icon">&#9776;</div>

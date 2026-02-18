@@ -589,6 +589,8 @@ class Agent:
                 tool_calls=tool_call_count,
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
+                provider=self.llm.provider,
+                model=self.llm.model,
             )
             token_info = f", {input_tokens}+{output_tokens} tokens" if input_tokens else ""
             logger.info(f"{self.config.name}: responded in {elapsed_ms}ms{token_info}")
@@ -597,7 +599,8 @@ class Agent:
 
         except Exception as e:
             elapsed_ms = int((time.monotonic() - start_time) * 1000)
-            metrics.record_error(self.config.name, str(e))
+            metrics.record_error(self.config.name, str(e),
+                                 provider=self.llm.provider, model=self.llm.model)
             logger.error(f"{self.config.name}: error after {elapsed_ms}ms: {e}")
             raise
 
@@ -802,7 +805,8 @@ class Agent:
 
             # Step 5: Metrics
             elapsed_ms = int((time.monotonic() - start_time) * 1000)
-            metrics.record_message(self.config.name, elapsed_ms=elapsed_ms)
+            metrics.record_message(self.config.name, elapsed_ms=elapsed_ms,
+                                   provider=self.llm.provider, model=self.llm.model)
             logger.info(f"{self.config.name}: streamed response in {elapsed_ms}ms")
 
         except Exception as e:
