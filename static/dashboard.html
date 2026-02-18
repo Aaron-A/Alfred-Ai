@@ -151,6 +151,29 @@
   </div>
 </div>
 
+<!-- ═════════ CONFIG MODAL ═════════ -->
+<div class="modal-overlay" id="configModal">
+  <div class="modal-box">
+    <div class="modal-header">
+      <span class="modal-title" id="modalAgentName">agent</span>
+      <button class="modal-close" onclick="closeConfigModal()">&times;</button>
+    </div>
+    <div class="modal-current">Current: <span id="modalCurrent">-</span></div>
+    <div class="modal-field">
+      <label class="modal-label" for="modalProvider">PROVIDER</label>
+      <select id="modalProvider" class="modal-select" onchange="onModalProviderChange()"></select>
+    </div>
+    <div class="modal-field">
+      <label class="modal-label" for="modalModel">MODEL</label>
+      <select id="modalModel" class="modal-select" onchange="onModalModelChange()"></select>
+    </div>
+    <div class="modal-actions">
+      <button class="modal-btn modal-btn--dismiss" onclick="closeConfigModal()">CANCEL</button>
+      <button class="modal-btn modal-btn--save" id="modalSaveBtn" disabled onclick="saveModalConfig()">SAVE</button>
+    </div>
+  </div>
+</div>
+
 <script src="/static/js/dashboard.js"></script>
 </body>
 </html>

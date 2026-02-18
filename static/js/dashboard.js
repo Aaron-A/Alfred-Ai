@@ -14,7 +14,6 @@ let state = {
   metrics: null,
   schedules: {},  // agent_name -> [schedule, ...]
   providerModels: {},  // provider -> [model, ...]
-  pendingChanges: {},  // agent_name -> {provider, model}
 };
 
 // ─── API Helpers ──────────────────────────────────
@@ -249,6 +248,46 @@ function renderStats() {
 
 // ─── Render: Agents Table ─────────────────────────
 
+function renderAgentsTable() {
+  const tbody = document.getElementById('agentsBody');
+  const agents = state.agents;
+  const metricsAgents = state.metrics?.agents || {};
+
+  if (!agents.length) {
+    tbody.innerHTML = '<tr><td colspan="7" class="empty-state">No agents configured. Run: alfred setup</td></tr>';
+    return;
+  }
+
+  let html = '';
+  for (const agent of agents) {
+    const m = metricsAgents[agent.name] || {};
+    const sessions = state.sessions?.[agent.name] || [];
+    const totalTokens = (m.input_tokens || 0) + (m.output_tokens || 0);
+    const provider = agent.provider || state.status?.primary_llm?.provider || '?';
+    const model = agent.model || state.status?.primary_llm?.model || '?';
+    const modelShort = model.length > 25 ? model.slice(0, 22) + '...' : model;
+
+    // Clean text display with edit pencil button
+    const editBtn = Object.keys(state.providerModels).length
+      ? `<button class="edit-btn" onclick="openConfigModal('${escHtml(agent.name)}')" title="Edit provider/model">&#9998;</button>`
+      : '';
+
+    html += `<tr>
+      <td class="fw-600" style="color:#fff;">${escHtml(agent.name)}</td>
+      <td>${statusBadge(agent.status || 'active')}</td>
+      <td><span class="text-dim">${escHtml(provider)}/${escHtml(modelShort)}</span> ${editBtn}</td>
+      <td>${sessions.length || 0}</td>
+      <td>${fmtNum(m.messages || 0)}</td>
+      <td>${fmtTokens(totalTokens)}</td>
+      <td>${m.errors ? '<span class="text-red">' + m.errors + '</span>' : '<span class="text-dim">0</span>'}</td>
+    </tr>`;
+  }
+
+  tbody.innerHTML = html;
+}
+
+// ─── Config Modal ─────────────────────────────────
+
 function buildProviderOptions(currentProvider) {
   const providers = Object.keys(state.providerModels);
   return providers.map(p =>
@@ -263,117 +302,119 @@ function buildModelOptions(provider, currentModel) {
   ).join('');
 }
 
-function onProviderChange(agentName, selectEl) {
-  const newProvider = selectEl.value;
+function openConfigModal(agentName) {
   const agent = state.agents.find(a => a.name === agentName);
   if (!agent) return;
 
-  // Get current effective values
-  const currentProvider = state.pendingChanges[agentName]?.provider || agent.provider;
-  const currentModel = state.pendingChanges[agentName]?.model || agent.model;
+  const modal = document.getElementById('configModal');
+  const provider = agent.provider || state.status?.primary_llm?.provider || 'anthropic';
+  const model = agent.model || state.status?.primary_llm?.model || '';
 
-  // When provider changes, auto-select the first model for that provider
+  // Set agent name
+  document.getElementById('modalAgentName').textContent = agentName;
+  modal.dataset.agent = agentName;
+
+  // Populate provider dropdown
+  const providerSelect = document.getElementById('modalProvider');
+  providerSelect.innerHTML = buildProviderOptions(provider);
+
+  // Populate model dropdown
+  const modelSelect = document.getElementById('modalModel');
+  modelSelect.innerHTML = buildModelOptions(provider, model);
+
+  // Current display
+  document.getElementById('modalCurrent').textContent = `${provider} / ${model}`;
+
+  // Reset button states
+  const saveBtn = document.getElementById('modalSaveBtn');
+  saveBtn.textContent = 'SAVE';
+  saveBtn.disabled = true;
+  saveBtn.className = 'modal-btn modal-btn--save';
+
+  // Show modal
+  modal.classList.add('active');
+}
+
+function closeConfigModal() {
+  document.getElementById('configModal').classList.remove('active');
+}
+
+function onModalProviderChange() {
+  const providerSelect = document.getElementById('modalProvider');
+  const modelSelect = document.getElementById('modalModel');
+  const newProvider = providerSelect.value;
+
+  // Repopulate model dropdown with first model selected
   const models = state.providerModels[newProvider] || [];
-  const newModel = models[0] || '';
+  modelSelect.innerHTML = buildModelOptions(newProvider, models[0] || '');
 
-  // Update the model dropdown
-  const modelSelect = document.getElementById(`model-${agentName}`);
-  if (modelSelect) {
-    modelSelect.innerHTML = buildModelOptions(newProvider, newModel);
-  }
-
-  // Track pending change
-  const origProvider = agent.provider;
-  const origModel = agent.model;
-
-  if (newProvider !== origProvider || newModel !== origModel) {
-    state.pendingChanges[agentName] = { provider: newProvider, model: newModel };
-  } else {
-    delete state.pendingChanges[agentName];
-  }
-
-  updateConfigButtons(agentName);
+  checkModalDirty();
 }
 
-function onModelChange(agentName, selectEl) {
-  const newModel = selectEl.value;
+function onModalModelChange() {
+  checkModalDirty();
+}
+
+function checkModalDirty() {
+  const modal = document.getElementById('configModal');
+  const agentName = modal.dataset.agent;
   const agent = state.agents.find(a => a.name === agentName);
   if (!agent) return;
 
-  const providerSelect = document.getElementById(`provider-${agentName}`);
-  const currentProvider = providerSelect ? providerSelect.value : agent.provider;
-  const origProvider = agent.provider;
-  const origModel = agent.model;
+  const origProvider = agent.provider || state.status?.primary_llm?.provider || 'anthropic';
+  const origModel = agent.model || state.status?.primary_llm?.model || '';
+  const newProvider = document.getElementById('modalProvider').value;
+  const newModel = document.getElementById('modalModel').value;
 
-  if (currentProvider !== origProvider || newModel !== origModel) {
-    state.pendingChanges[agentName] = { provider: currentProvider, model: newModel };
-  } else {
-    delete state.pendingChanges[agentName];
-  }
-
-  updateConfigButtons(agentName);
+  const isDirty = (newProvider !== origProvider || newModel !== origModel);
+  const saveBtn = document.getElementById('modalSaveBtn');
+  saveBtn.disabled = !isDirty;
+  saveBtn.className = isDirty ? 'modal-btn modal-btn--save modal-btn--active' : 'modal-btn modal-btn--save';
 }
 
-function updateConfigButtons(agentName) {
-  const saveBtn = document.getElementById(`save-${agentName}`);
-  const hasPending = !!state.pendingChanges[agentName];
-  if (saveBtn) {
-    saveBtn.disabled = !hasPending;
-    saveBtn.classList.toggle('cfg-btn--active', hasPending);
-  }
-}
+async function saveModalConfig() {
+  const modal = document.getElementById('configModal');
+  const agentName = modal.dataset.agent;
+  const provider = document.getElementById('modalProvider').value;
+  const model = document.getElementById('modalModel').value;
 
-async function saveAgentConfig(agentName) {
-  const pending = state.pendingChanges[agentName];
-  if (!pending) return;
+  const saveBtn = document.getElementById('modalSaveBtn');
+  saveBtn.disabled = true;
+  saveBtn.textContent = 'SAVING...';
 
-  const saveBtn = document.getElementById(`save-${agentName}`);
-  if (saveBtn) {
-    saveBtn.disabled = true;
-    saveBtn.textContent = '...';
-  }
-
-  const result = await patchJSON(`/v1/agents/${agentName}/config`, pending);
+  const result = await patchJSON(`/v1/agents/${agentName}/config`, { provider, model });
 
   if (result?.message) {
-    // Success — update local state
+    // Update local state
     const agent = state.agents.find(a => a.name === agentName);
     if (agent) {
-      agent.provider = pending.provider;
-      agent.model = pending.model;
-    }
-    delete state.pendingChanges[agentName];
-
-    if (saveBtn) {
-      saveBtn.textContent = 'SAVED';
-      saveBtn.classList.remove('cfg-btn--active');
-      saveBtn.classList.add('cfg-btn--saved');
-      setTimeout(() => {
-        if (saveBtn) {
-          saveBtn.textContent = 'SAVE';
-          saveBtn.classList.remove('cfg-btn--saved');
-        }
-      }, 2000);
+      agent.provider = provider;
+      agent.model = model;
     }
 
-    // Show restart banner
-    showRestartBanner();
+    saveBtn.textContent = 'SAVED';
+    saveBtn.className = 'modal-btn modal-btn--save modal-btn--saved';
+
+    // Refresh the table immediately
+    renderAgentsTable();
+
+    // Close modal after brief success flash, then show restart banner
+    setTimeout(() => {
+      closeConfigModal();
+      showRestartBanner();
+    }, 800);
   } else {
-    // Error
-    if (saveBtn) {
-      saveBtn.textContent = 'ERR';
-      saveBtn.classList.add('cfg-btn--error');
-      setTimeout(() => {
-        if (saveBtn) {
-          saveBtn.textContent = 'SAVE';
-          saveBtn.disabled = false;
-          saveBtn.classList.remove('cfg-btn--error');
-          saveBtn.classList.add('cfg-btn--active');
-        }
-      }, 2000);
-    }
+    saveBtn.textContent = 'FAILED';
+    saveBtn.className = 'modal-btn modal-btn--save modal-btn--error';
+    setTimeout(() => {
+      saveBtn.textContent = 'SAVE';
+      saveBtn.disabled = false;
+      checkModalDirty();
+    }, 2000);
   }
 }
+
+// ─── Restart Banner ───────────────────────────────
 
 function showRestartBanner() {
   let banner = document.getElementById('restartBanner');
@@ -383,10 +424,9 @@ function showRestartBanner() {
     banner.className = 'restart-banner';
     banner.innerHTML = `
       <span class="restart-banner-text">Config saved. Restart daemon to apply changes.</span>
-      <button class="cfg-btn cfg-btn--restart" onclick="restartDaemon()">RESTART DAEMON</button>
-      <button class="cfg-btn cfg-btn--dismiss" onclick="dismissBanner()">DISMISS</button>
+      <button class="modal-btn modal-btn--restart" onclick="restartDaemon()">RESTART DAEMON</button>
+      <button class="modal-btn modal-btn--dismiss" onclick="dismissBanner()">DISMISS</button>
     `;
-    // Insert after the header
     const header = document.querySelector('.header');
     header.parentNode.insertBefore(banner, header.nextSibling);
   }
@@ -400,7 +440,7 @@ function dismissBanner() {
 
 async function restartDaemon() {
   const banner = document.getElementById('restartBanner');
-  const btn = banner?.querySelector('.cfg-btn--restart');
+  const btn = banner?.querySelector('.modal-btn--restart');
   if (btn) {
     btn.disabled = true;
     btn.textContent = 'RESTARTING...';
@@ -411,9 +451,8 @@ async function restartDaemon() {
   if (result?.status === 'restarted') {
     if (btn) {
       btn.textContent = 'RESTARTED';
-      btn.classList.add('cfg-btn--saved');
+      btn.className = 'modal-btn modal-btn--restart modal-btn--saved';
     }
-    // Wait a moment then hide banner and refresh
     setTimeout(() => {
       dismissBanner();
       refreshData();
@@ -422,74 +461,16 @@ async function restartDaemon() {
     const msg = result?.message || 'Restart failed';
     if (btn) {
       btn.textContent = 'FAILED';
-      btn.classList.add('cfg-btn--error');
+      btn.className = 'modal-btn modal-btn--restart modal-btn--error';
       setTimeout(() => {
         btn.textContent = 'RESTART DAEMON';
         btn.disabled = false;
-        btn.classList.remove('cfg-btn--error');
+        btn.className = 'modal-btn modal-btn--restart';
       }, 3000);
     }
-    // Show the message
     const textEl = banner?.querySelector('.restart-banner-text');
     if (textEl) textEl.textContent = msg;
   }
-}
-
-function renderAgentsTable() {
-  const tbody = document.getElementById('agentsBody');
-  const agents = state.agents;
-  const metricsAgents = state.metrics?.agents || {};
-  const hasProviders = Object.keys(state.providerModels).length > 0;
-
-  if (!agents.length) {
-    tbody.innerHTML = '<tr><td colspan="8" class="empty-state">No agents configured. Run: alfred setup</td></tr>';
-    return;
-  }
-
-  let html = '';
-  for (const agent of agents) {
-    const m = metricsAgents[agent.name] || {};
-    const sessions = state.sessions?.[agent.name] || [];
-    const totalTokens = (m.input_tokens || 0) + (m.output_tokens || 0);
-    const provider = state.pendingChanges[agent.name]?.provider || agent.provider || state.status?.primary_llm?.provider || '?';
-    const model = state.pendingChanges[agent.name]?.model || agent.model || state.status?.primary_llm?.model || '?';
-
-    // Provider / Model column — dropdowns if registry loaded, plain text otherwise
-    let providerModelHtml;
-    if (hasProviders) {
-      const hasPending = !!state.pendingChanges[agent.name];
-      providerModelHtml = `
-        <div class="cfg-inline">
-          <select id="provider-${escHtml(agent.name)}" class="cfg-select cfg-select--provider"
-                  onchange="onProviderChange('${escHtml(agent.name)}', this)">
-            ${buildProviderOptions(provider)}
-          </select>
-          <span class="cfg-sep">/</span>
-          <select id="model-${escHtml(agent.name)}" class="cfg-select cfg-select--model"
-                  onchange="onModelChange('${escHtml(agent.name)}', this)">
-            ${buildModelOptions(provider, model)}
-          </select>
-          <button id="save-${escHtml(agent.name)}" class="cfg-btn cfg-btn--save${hasPending ? ' cfg-btn--active' : ''}"
-                  onclick="saveAgentConfig('${escHtml(agent.name)}')"
-                  ${hasPending ? '' : 'disabled'}>SAVE</button>
-        </div>`;
-    } else {
-      const modelShort = model.length > 25 ? model.slice(0, 22) + '...' : model;
-      providerModelHtml = `<span class="text-dim">${escHtml(provider)}/${escHtml(modelShort)}</span>`;
-    }
-
-    html += `<tr>
-      <td class="fw-600" style="color:#fff;">${escHtml(agent.name)}</td>
-      <td>${statusBadge(agent.status || 'active')}</td>
-      <td>${providerModelHtml}</td>
-      <td>${sessions.length || 0}</td>
-      <td>${fmtNum(m.messages || 0)}</td>
-      <td>${fmtTokens(totalTokens)}</td>
-      <td>${m.errors ? '<span class="text-red">' + m.errors + '</span>' : '<span class="text-dim">0</span>'}</td>
-    </tr>`;
-  }
-
-  tbody.innerHTML = html;
 }
 
 // ─── Render: Schedules Table ──────────────────────
@@ -696,5 +677,13 @@ document.addEventListener('DOMContentLoaded', () => {
   const periodSelect = document.getElementById('metricsPeriod');
   if (periodSelect) {
     periodSelect.addEventListener('change', () => refreshData());
+  }
+
+  // Close modal on backdrop click
+  const modal = document.getElementById('configModal');
+  if (modal) {
+    modal.addEventListener('click', (e) => {
+      if (e.target === modal) closeConfigModal();
+    });
   }
 });

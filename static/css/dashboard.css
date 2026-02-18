@@ -485,70 +485,167 @@ body {
    ═══════════════════════════════════════ */
 
 /* ═══════════════════════════════════════
-   CONFIG EDITOR (inline dropdowns)
+   EDIT BUTTON (pencil in agents table)
    ═══════════════════════════════════════ */
 
-.cfg-inline {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex-wrap: nowrap;
+.edit-btn {
+  background: none;
+  border: 1px solid transparent;
+  color: var(--text-dim);
+  font-size: 12px;
+  cursor: pointer;
+  padding: 2px 5px;
+  margin-left: 6px;
+  border-radius: 3px;
+  transition: var(--transition);
+  vertical-align: middle;
+  line-height: 1;
 }
 
-.cfg-select {
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 10px;
-  font-weight: 500;
+.edit-btn:hover {
   color: var(--cyan);
+  border-color: rgba(6, 182, 212, 0.3);
   background: rgba(6, 182, 212, 0.08);
-  border: 1px solid rgba(6, 182, 212, 0.2);
-  border-radius: 3px;
-  padding: 3px 20px 3px 6px;
+}
+
+/* ═══════════════════════════════════════
+   CONFIG MODAL
+   ═══════════════════════════════════════ */
+
+.modal-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.7);
+  z-index: 1000;
+  align-items: center;
+  justify-content: center;
+  backdrop-filter: blur(4px);
+}
+
+.modal-overlay.active {
+  display: flex;
+  animation: fadeUp 0.15s ease;
+}
+
+.modal-box {
+  background: #111;
+  border: 1px solid var(--border-light);
+  border-radius: 6px;
+  padding: 24px;
+  min-width: 360px;
+  max-width: 440px;
+  width: 90vw;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.modal-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: #fff;
+}
+
+.modal-close {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 20px;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+  transition: var(--transition);
+}
+
+.modal-close:hover {
+  color: var(--text);
+}
+
+.modal-current {
+  font-size: 10px;
+  color: var(--text-dim);
+  margin-bottom: 20px;
+  letter-spacing: 0.5px;
+}
+
+.modal-current span {
+  color: var(--text-muted);
+}
+
+.modal-field {
+  margin-bottom: 16px;
+}
+
+.modal-label {
+  display: block;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 1.5px;
+  color: var(--text-dim);
+  margin-bottom: 6px;
+}
+
+.modal-select {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+  padding: 8px 32px 8px 10px;
+  width: 100%;
   cursor: pointer;
   transition: var(--transition);
   outline: none;
   -webkit-appearance: none;
   appearance: none;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5'%3E%3Cpath d='M0 0l4 5 4-5z' fill='%2306b6d4'/%3E%3C/svg%3E");
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23888'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
-  background-position: right 6px center;
+  background-position: right 10px center;
 }
 
-.cfg-select:hover {
-  border-color: rgba(6, 182, 212, 0.5);
-  background-color: rgba(6, 182, 212, 0.12);
+.modal-select:hover {
+  border-color: #444;
 }
 
-.cfg-select:focus {
+.modal-select:focus {
   border-color: var(--cyan);
   box-shadow: 0 0 0 1px rgba(6, 182, 212, 0.2);
 }
 
-.cfg-select option {
+.modal-select option {
   background: #111;
   color: var(--text);
 }
 
-.cfg-select--provider {
-  max-width: 90px;
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 24px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
 }
 
-.cfg-select--model {
-  max-width: 220px;
-}
+/* ═══════════════════════════════════════
+   MODAL BUTTONS
+   ═══════════════════════════════════════ */
 
-.cfg-sep {
-  color: var(--text-dim);
-  font-size: 10px;
-  margin: 0 1px;
-}
-
-.cfg-btn {
+.modal-btn {
   font-family: 'JetBrains Mono', monospace;
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 700;
   letter-spacing: 0.5px;
-  padding: 3px 8px;
+  padding: 6px 14px;
   border-radius: 3px;
   border: 1px solid var(--border-light);
   background: transparent;
@@ -558,28 +655,33 @@ body {
   white-space: nowrap;
 }
 
-.cfg-btn:disabled {
+.modal-btn:disabled {
   opacity: 0.3;
   cursor: default;
 }
 
-.cfg-btn--save.cfg-btn--active {
+.modal-btn:hover:not(:disabled) {
+  color: var(--text-muted);
+  border-color: #444;
+}
+
+.modal-btn--save.modal-btn--active {
   border-color: var(--cyan);
   color: var(--cyan);
   background: rgba(6, 182, 212, 0.1);
 }
 
-.cfg-btn--save.cfg-btn--active:hover {
+.modal-btn--save.modal-btn--active:hover {
   background: rgba(6, 182, 212, 0.2);
 }
 
-.cfg-btn--saved {
+.modal-btn--saved {
   border-color: var(--green) !important;
   color: var(--green) !important;
   background: rgba(34, 197, 94, 0.1) !important;
 }
 
-.cfg-btn--error {
+.modal-btn--error {
   border-color: var(--red) !important;
   color: var(--red) !important;
   background: rgba(239, 68, 68, 0.1) !important;
@@ -607,7 +709,7 @@ body {
   flex: 1;
 }
 
-.cfg-btn--restart {
+.modal-btn--restart {
   border-color: var(--orange);
   color: var(--orange);
   background: rgba(249, 115, 22, 0.1);
@@ -615,16 +717,16 @@ body {
   padding: 5px 12px;
 }
 
-.cfg-btn--restart:hover:not(:disabled) {
+.modal-btn--restart:hover:not(:disabled) {
   background: rgba(249, 115, 22, 0.2);
 }
 
-.cfg-btn--dismiss {
+.modal-btn--dismiss {
   font-size: 10px;
   padding: 5px 10px;
 }
 
-.cfg-btn--dismiss:hover {
+.modal-btn--dismiss:hover {
   color: var(--text-muted);
   border-color: #444;
 }
