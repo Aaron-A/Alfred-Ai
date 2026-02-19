@@ -63,6 +63,21 @@ async function postJSON(path, body = {}) {
   }
 }
 
+async function deleteJSON(path) {
+  try {
+    const res = await fetch(API + path, { method: 'DELETE' });
+    const data = await res.json();
+    if (!res.ok) {
+      data._status = res.status;
+      data._error = data.detail || data.message || 'Request failed';
+    }
+    return data;
+  } catch (e) {
+    console.error('DELETE failed:', path, e);
+    return null;
+  }
+}
+
 // ─── Data Fetching ────────────────────────────────
 
 async function refreshData() {
@@ -273,15 +288,18 @@ function renderAgentsTable() {
     const model = agent.model || state.status?.primary_llm?.model || '?';
     const modelShort = model.length > 25 ? model.slice(0, 22) + '...' : model;
 
-    // Clean text display with edit pencil button
+    // Clean text display with edit pencil + delete button
     const editBtn = Object.keys(state.providerModels).length
       ? `<button class="edit-btn" onclick="openConfigModal('${escHtml(agent.name)}')" title="Edit provider/model">&#9998;</button>`
+      : '';
+    const deleteBtn = state.agents.length > 1
+      ? `<button class="delete-btn" onclick="openDeleteAgentModal('${escHtml(agent.name)}')" title="Delete agent">&#10005;</button>`
       : '';
 
     html += `<tr>
       <td class="fw-600" style="color:#fff;">${escHtml(agent.name)}</td>
       <td>${statusBadge(agent.status || 'active')}</td>
-      <td><span class="text-dim">${escHtml(provider)}/${escHtml(modelShort)}</span> ${editBtn}</td>
+      <td><span class="text-dim">${escHtml(provider)}/${escHtml(modelShort)}</span> ${editBtn}${deleteBtn}</td>
       <td>${sessions.length || 0}</td>
       <td>${fmtNum(m.messages || 0)}</td>
       <td>${fmtTokens(totalTokens)}</td>
@@ -520,6 +538,7 @@ function openCreateAgentModal() {
   // Reset all fields
   document.getElementById('newAgentName').value = '';
   document.getElementById('newAgentDesc').value = '';
+  document.getElementById('newAgentDiscordChannel').value = '';
   document.getElementById('newAgentSoul').value = '';
 
   // Reset hints
@@ -619,13 +638,16 @@ async function createAgent() {
   const model = document.getElementById('newAgentModel').value;
   const soulPrompt = document.getElementById('newAgentSoul').value.trim();
 
-  // Disable button and show progress
+  // Disable button and show spinner
   createBtn.disabled = true;
-  createBtn.textContent = soulPrompt ? 'GENERATING...' : 'CREATING...';
+  createBtn.innerHTML = `<span class="btn-spinner"></span>${soulPrompt ? 'GENERATING...' : 'CREATING...'}`;
   createBtn.className = 'modal-btn modal-btn--save';
+
+  const discordChannelId = document.getElementById('newAgentDiscordChannel').value.trim();
 
   const body = { name, description, provider, model };
   if (soulPrompt) body.soul_prompt = soulPrompt;
+  if (discordChannelId) body.discord_channel_id = discordChannelId;
 
   const result = await postJSON('/v1/agents', body);
 
@@ -653,6 +675,74 @@ async function createAgent() {
       createBtn.textContent = 'CREATE';
       createBtn.className = 'modal-btn modal-btn--save';
       validateCreateForm();
+    }, 3000);
+  }
+}
+
+// ─── Delete Agent Modal ──────────────────────────
+
+let deleteTargetAgent = '';
+
+function openDeleteAgentModal(name) {
+  deleteTargetAgent = name;
+  const modal = document.getElementById('deleteAgentModal');
+  document.getElementById('deleteAgentTitle').textContent = `Delete "${name}"`;
+  document.getElementById('deleteConfirmInput').value = '';
+  document.getElementById('deleteConfirmHint').textContent = `Type "${name}" to confirm`;
+  document.getElementById('deleteConfirmHint').className = 'modal-hint';
+
+  const deleteBtn = document.getElementById('deleteAgentBtn');
+  deleteBtn.disabled = true;
+  deleteBtn.textContent = 'DELETE';
+  deleteBtn.className = 'modal-btn modal-btn--danger';
+
+  modal.classList.add('active');
+  setTimeout(() => document.getElementById('deleteConfirmInput').focus(), 100);
+}
+
+function closeDeleteAgentModal() {
+  document.getElementById('deleteAgentModal').classList.remove('active');
+  deleteTargetAgent = '';
+}
+
+function validateDeleteConfirm() {
+  const typed = document.getElementById('deleteConfirmInput').value;
+  const matches = typed === deleteTargetAgent;
+  const deleteBtn = document.getElementById('deleteAgentBtn');
+  deleteBtn.disabled = !matches;
+  deleteBtn.className = matches
+    ? 'modal-btn modal-btn--danger modal-btn--danger-active'
+    : 'modal-btn modal-btn--danger';
+}
+
+async function deleteAgent() {
+  const deleteBtn = document.getElementById('deleteAgentBtn');
+  deleteBtn.disabled = true;
+  deleteBtn.innerHTML = '<span class="btn-spinner"></span>DELETING...';
+
+  const result = await deleteJSON(`/v1/agents/${deleteTargetAgent}`);
+
+  if (result && !result._error) {
+    deleteBtn.textContent = 'DELETED';
+    deleteBtn.className = 'modal-btn modal-btn--danger modal-btn--saved';
+    await refreshData();
+    setTimeout(() => {
+      closeDeleteAgentModal();
+      showRestartBanner();
+    }, 800);
+  } else {
+    const errMsg = result?._error || 'Deletion failed';
+    deleteBtn.textContent = 'FAILED';
+    deleteBtn.className = 'modal-btn modal-btn--danger modal-btn--error';
+
+    const hint = document.getElementById('deleteConfirmHint');
+    hint.textContent = errMsg;
+    hint.className = 'modal-hint modal-hint--error';
+
+    setTimeout(() => {
+      deleteBtn.textContent = 'DELETE';
+      deleteBtn.className = 'modal-btn modal-btn--danger';
+      validateDeleteConfirm();
     }, 3000);
   }
 }
@@ -951,6 +1041,13 @@ document.addEventListener('DOMContentLoaded', () => {
   if (createModal) {
     createModal.addEventListener('click', (e) => {
       if (e.target === createModal) closeCreateAgentModal();
+    });
+  }
+
+  const deleteModal = document.getElementById('deleteAgentModal');
+  if (deleteModal) {
+    deleteModal.addEventListener('click', (e) => {
+      if (e.target === deleteModal) closeDeleteAgentModal();
     });
   }
 });

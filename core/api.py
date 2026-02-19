@@ -12,6 +12,7 @@ Endpoints:
     POST /v1/memory/store      Store a new memory
     GET  /v1/agents            List all agents
     POST /v1/agents            Create a new agent with workspace
+    DELETE /v1/agents/{name}   Delete an agent, workspace, and Discord mapping
     GET  /v1/agents/{name}     Get agent details + session info
     POST /v1/agents/{name}/reset  Reset an agent's session
     GET  /v1/sessions/{agent}  List all saved sessions for an agent
@@ -29,6 +30,7 @@ import os
 import re
 import json
 import time
+import shutil
 import asyncio
 import queue
 from pathlib import Path
@@ -72,6 +74,7 @@ PROVIDER_MODELS = {
         "o4-mini",
     ],
     "ollama": [
+        "llama3.1:8b",
         "llama3.1",
         "llama3.2",
         "mistral",
@@ -775,6 +778,7 @@ def create_app() -> FastAPI:
         provider: Optional[str] = Field(default=None, description="LLM provider")
         model: Optional[str] = Field(default=None, description="LLM model")
         soul_prompt: Optional[str] = Field(default=None, description="Freeform prompt to LLM-generate SOUL.md")
+        discord_channel_id: Optional[str] = Field(default=None, description="Discord channel ID to auto-link")
 
     def _validate_agent_name(name: str) -> str:
         """Validate agent name. Returns error message or empty string."""
@@ -937,6 +941,22 @@ def create_app() -> FastAPI:
             agent_entry["model"] = req.model
 
         cfg["agents"][req.name] = agent_entry
+
+        # Add Discord channel mapping if provided
+        if req.discord_channel_id and req.discord_channel_id.strip():
+            channel_id = req.discord_channel_id.strip()
+            if not channel_id.isdigit():
+                raise HTTPException(status_code=400, detail="Discord channel ID must be numeric.")
+            if "discord" not in cfg:
+                cfg["discord"] = {}
+            if "channels" not in cfg["discord"]:
+                cfg["discord"]["channels"] = {}
+            cfg["discord"]["channels"][channel_id] = {
+                "name": req.name,
+                "agent": req.name,
+                "require_mention": False,
+            }
+
         _save_config(cfg)
 
         logger.info(f"Created agent '{req.name}' (soul_generated={soul_generated})")
@@ -950,6 +970,51 @@ def create_app() -> FastAPI:
             "soul_generated": soul_generated,
             "restart_required": True,
         }
+
+    # ─── Delete Agent ────────────────────────────────────
+
+    @app.delete("/v1/agents/{name}")
+    async def delete_agent(name: str):
+        """Delete an agent: remove config, workspace, Discord mapping, and pool entries."""
+        from .config import _save_config
+        cfg = _load_config()
+        agents_cfg = cfg.get("agents", {})
+
+        if name not in agents_cfg:
+            raise HTTPException(status_code=404, detail=f"Agent '{name}' not found.")
+
+        if len(agents_cfg) <= 1:
+            raise HTTPException(status_code=409, detail="Cannot delete the last remaining agent.")
+
+        # 1. Remove agent entry
+        del cfg["agents"][name]
+
+        # 2. Remove Discord channel mappings for this agent
+        discord_channels = cfg.get("discord", {}).get("channels", {})
+        channels_removed = [
+            ch_id for ch_id, ch_cfg in discord_channels.items()
+            if ch_cfg.get("agent") == name
+        ]
+        for ch_id in channels_removed:
+            del cfg["discord"]["channels"][ch_id]
+
+        # 3. Save config
+        _save_config(cfg)
+
+        # 4. Delete workspace directory
+        workspace_dir = config.PROJECT_ROOT / "workspaces" / name
+        if workspace_dir.exists():
+            shutil.rmtree(workspace_dir)
+
+        # 5. Evict from agent pool
+        async with pool._lock:
+            keys_to_delete = [k for k in pool._agents if k[0] == name]
+            for k in keys_to_delete:
+                del pool._agents[k]
+
+        logger.info(f"Deleted agent '{name}' (channels_removed={len(channels_removed)})")
+
+        return {"deleted": name, "restart_required": True}
 
     # ─── Agent Config Update ──────────────────────────────
 

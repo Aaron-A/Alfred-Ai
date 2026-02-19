@@ -213,6 +213,14 @@
     </div>
 
     <div class="modal-field">
+      <label class="modal-label" for="newAgentDiscordChannel">DISCORD CHANNEL ID <span class="modal-label-hint">(optional)</span></label>
+      <input type="text" id="newAgentDiscordChannel" class="modal-input"
+             placeholder="e.g. 1473423154759074026" maxlength="20"
+             autocomplete="off">
+      <div class="modal-hint">Paste a Discord channel ID to auto-link this agent</div>
+    </div>
+
+    <div class="modal-field">
       <label class="modal-label" for="newAgentSoul">DESCRIBE THIS AGENT <span class="modal-label-hint">(optional &mdash; generates a rich personality)</span></label>
       <textarea id="newAgentSoul" class="modal-textarea"
                 placeholder="Describe what this agent should do, its personality, boundaries, operating mode, tools it needs..."
@@ -223,6 +231,31 @@
     <div class="modal-actions">
       <button class="modal-btn modal-btn--dismiss" onclick="closeCreateAgentModal()">CANCEL</button>
       <button class="modal-btn modal-btn--save" id="createAgentBtn" disabled onclick="createAgent()">CREATE</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═════════ DELETE AGENT MODAL ═════════ -->
+<div class="modal-overlay" id="deleteAgentModal">
+  <div class="modal-box">
+    <div class="modal-header">
+      <span class="modal-title" id="deleteAgentTitle">Delete Agent</span>
+      <button class="modal-close" onclick="closeDeleteAgentModal()">&times;</button>
+    </div>
+
+    <p class="modal-warning">This will permanently delete the agent, its workspace, memory, and Discord channel mapping.</p>
+
+    <div class="modal-field">
+      <label class="modal-label" for="deleteConfirmInput">TYPE AGENT NAME TO CONFIRM</label>
+      <input type="text" id="deleteConfirmInput" class="modal-input modal-input--confirm"
+             placeholder="" autocomplete="off"
+             oninput="validateDeleteConfirm()">
+      <div class="modal-hint" id="deleteConfirmHint">Type the agent name to confirm</div>
+    </div>
+
+    <div class="modal-actions">
+      <button class="modal-btn modal-btn--dismiss" onclick="closeDeleteAgentModal()">CANCEL</button>
+      <button class="modal-btn modal-btn--danger" id="deleteAgentBtn" disabled onclick="deleteAgent()">DELETE</button>
     </div>
   </div>
 </div>
