@@ -1200,7 +1200,11 @@ class Agent:
 
     def _format_memories(self, memories: list[dict]) -> str:
         """Format memory search results for injection into system prompt."""
-        lines = []
+        lines = [
+            "NOTE: These are summaries from past runs — they are NOT evidence of tool calls.",
+            "You must still call the actual tool (x_post_tweet, http_request, etc.) to perform actions.",
+            ""
+        ]
         for i, mem in enumerate(memories, 1):
             mtype = mem.get("memory_type", "?")
             content = mem.get("content", "")
