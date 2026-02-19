@@ -140,18 +140,48 @@ def _get_user_id(creds: dict) -> str:
         body = result.split("\n", 1)[1]
         data = json.loads(body)
         uid = data["data"]["id"]
-        logger.info(f"Resolved X user ID: {uid}")
-        # Try to persist it for next time
+        username = data["data"].get("username", "")
+        logger.info(f"Resolved X user ID: {uid}, username: {username}")
+        # Try to persist both for next time
         try:
             from core.config import _load_config, _save_config
             cfg = _load_config()
             if "x" in cfg.get("services", {}):
                 cfg["services"]["x"]["user_id"] = uid
+                if username:
+                    cfg["services"]["x"]["username"] = username
                 _save_config(cfg)
-                logger.info("Saved user_id to alfred.json")
+                logger.info("Saved user_id and username to alfred.json")
         except Exception as e:
             logger.warning(f"Could not persist user_id: {e}")
         return uid
+    except (json.JSONDecodeError, KeyError, IndexError):
+        return ""
+
+
+def _get_username(creds: dict) -> str:
+    """Get the authenticated user's @username, fetching from API if needed."""
+    username = creds.get("username", "")
+    if username:
+        return username
+
+    # Fetch from API — /2/users/me returns username by default
+    result = x_api_request(endpoint="/2/users/me")
+    try:
+        body = result.split("\n", 1)[1]
+        data = json.loads(body)
+        username = data["data"]["username"]
+        logger.info(f"Resolved X username: {username}")
+        try:
+            from core.config import _load_config, _save_config
+            cfg = _load_config()
+            if "x" in cfg.get("services", {}):
+                cfg["services"]["x"]["username"] = username
+                _save_config(cfg)
+                logger.info("Saved username to alfred.json")
+        except Exception as e:
+            logger.warning(f"Could not persist username: {e}")
+        return username
     except (json.JSONDecodeError, KeyError, IndexError):
         return ""
 
@@ -278,9 +308,16 @@ def x_post_tweet(text: str, reply_to: str = None) -> str:
         lines = result.split("\n", 1)
         if lines[0].startswith("HTTP 2"):
             data = json.loads(lines[1])
-            tweet_id = data.get("data", {}).get("id", "?")
+            tweet_id = data.get("data", {}).get("id")
+            if not tweet_id:
+                return result
             action = "Reply" if reply_to else "Tweet"
-            tweet_url = f"https://x.com/DarkStoneCap/status/{tweet_id}"
+            creds = _get_x_credentials()
+            username = _get_username(creds)
+            if username:
+                tweet_url = f"https://x.com/{username}/status/{tweet_id}"
+            else:
+                tweet_url = f"Tweet ID: {tweet_id}"
             return f"{action} posted successfully.\nLink (copy this exactly): {tweet_url}\n{result}"
     except (json.JSONDecodeError, IndexError, KeyError):
         pass

@@ -411,23 +411,33 @@ class Agent:
             data = json.loads(self._session_file.read_text())
             messages = data.get("messages", [])
 
-            # Only load user/assistant messages (skip malformed entries)
-            valid = [m for m in messages if m.get("role") in ("user", "assistant") and m.get("content")]
+            # Load all valid messages including tool calls (critical for LLM to see
+            # its own tool-calling pattern — prevents tool-call hallucination).
+            # Valid roles: user, assistant (may have text or tool_use content),
+            # tool (OpenAI format tool results).
+            # Content can be: string, list of blocks (Anthropic), or dict (OpenAI tool msg).
+            valid = [m for m in messages
+                     if m.get("role") in ("user", "assistant", "tool")
+                     and (m.get("content") is not None or m.get("tool_calls"))]
 
             # Trim to window size
             valid = self._trim_history(valid)
 
             self.history = valid
+            # Count turns = user messages with string content (not tool_result)
+            turn_count = sum(
+                1 for m in valid
+                if m.get("role") == "user" and isinstance(m.get("content"), str)
+            )
             self._session_meta = {
                 "agent": data.get("agent", self.config.name),
                 "started_at": data.get("started_at", datetime.now(timezone.utc).isoformat()),
                 "last_activity": data.get("last_activity", datetime.now(timezone.utc).isoformat()),
-                "turn_count": data.get("turn_count", len(valid) // 2),
+                "turn_count": data.get("turn_count", turn_count),
             }
 
             if valid:
-                turns = len(valid) // 2
-                logger.info(f"{self.config.name}: Restored {turns} turn(s) from previous session")
+                logger.info(f"{self.config.name}: Restored {turn_count} turn(s) from previous session ({len(valid)} messages)")
 
         except (json.JSONDecodeError, KeyError, TypeError) as e:
             logger.warning(f"{self.config.name}: Could not load session ({e}), starting fresh")
@@ -444,9 +454,17 @@ class Agent:
 
         Called after every interaction. Writes atomically (tmp → rename)
         to avoid corruption if the process is killed mid-write.
+
+        History now includes tool messages (assistant+tool_use, tool_result,
+        tool-role messages for OpenAI). All content is pre-serialized to
+        plain dicts/strings by _serialize_content() before reaching history.
         """
         self._session_meta["last_activity"] = datetime.now(timezone.utc).isoformat()
-        self._session_meta["turn_count"] = len(self.history) // 2
+        # Count turns = number of user messages with string content (not tool_result)
+        self._session_meta["turn_count"] = sum(
+            1 for m in self.history
+            if m.get("role") == "user" and isinstance(m.get("content"), str)
+        )
 
         data = {
             **self._session_meta,
@@ -463,14 +481,45 @@ class Agent:
             # Clean up temp file on failure
             tmp_file.unlink(missing_ok=True)
 
+    def _split_into_turns(self, messages: list[dict]) -> list[list[dict]]:
+        """
+        Split a flat message list into logical turns.
+
+        A "turn" starts with a user message (with string content — not a tool_result)
+        and includes everything up to (but not including) the next such user message.
+        This groups: user → assistant+tool_use → tool_result → ... → final assistant.
+
+        Returns a list of turns, where each turn is a list of messages.
+        """
+        turns = []
+        current_turn = []
+
+        for msg in messages:
+            # Detect the start of a new human turn (not a tool_result user message)
+            is_new_human_turn = (
+                msg.get("role") == "user"
+                and isinstance(msg.get("content"), str)
+            )
+
+            if is_new_human_turn and current_turn:
+                turns.append(current_turn)
+                current_turn = []
+
+            current_turn.append(msg)
+
+        if current_turn:
+            turns.append(current_turn)
+
+        return turns
+
     def _trim_history(self, messages: list[dict]) -> list[dict]:
         """
         Intelligently trim conversation history to stay within limits.
 
         Strategy:
-        1. Hard cap on turn count (session_max_turns × 2 messages)
-        2. Token budget — estimate token usage, trim oldest turns first
-        3. Always trim in pairs (user + assistant) to keep history coherent
+        1. Split messages into logical turns (user msg + all tool calls + final response)
+        2. Hard cap on turn count (session_max_turns)
+        3. Token budget — estimate token usage, trim oldest turns first
         4. PRE-COMPACTION FLUSH: Before dropping messages, summarize and store
            them in vector memory so important context isn't lost.
 
@@ -478,31 +527,35 @@ class Agent:
         runs 30+ tool calls analyzing BTC, the early analysis gets preserved
         in memory before it falls off the context window.
         """
-        max_messages = self.config.session_max_turns * 2
+        max_turns = self.config.session_max_turns
         max_chars = self.config.session_max_tokens * 4  # Rough: 1 token ≈ 4 chars
 
-        # Collect messages that will be dropped
-        messages_to_drop = []
+        turns = self._split_into_turns(messages)
+        turns_to_drop = []
 
         # 1. Trim by turn count
-        if len(messages) > max_messages:
-            messages_to_drop.extend(messages[:-max_messages])
-            messages = messages[-max_messages:]
+        if len(turns) > max_turns:
+            turns_to_drop.extend(turns[:-max_turns])
+            turns = turns[-max_turns:]
 
         # 2. Trim by estimated token budget
-        total_chars = sum(len(m.get("content", "")) for m in messages)
-        while total_chars > max_chars and len(messages) > 2:
-            # Collect the pair being dropped
-            messages_to_drop.extend(messages[:2])
-            removed_chars = len(messages[0].get("content", "")) + len(messages[1].get("content", ""))
-            messages = messages[2:]
-            total_chars -= removed_chars
+        def turn_chars(turn):
+            return sum(self._estimate_content_chars(m.get("content", "")) for m in turn)
+
+        total_chars = sum(turn_chars(t) for t in turns)
+        while total_chars > max_chars and len(turns) > 1:
+            dropped = turns.pop(0)
+            turns_to_drop.append(dropped)
+            total_chars -= turn_chars(dropped)
 
         # 3. Pre-compaction flush — save expiring context to memory
-        if messages_to_drop and self.memory and self.config.pre_compaction_flush:
-            self._flush_expiring_context(messages_to_drop)
+        if turns_to_drop and self.memory and self.config.pre_compaction_flush:
+            # Flatten dropped turns back into a message list
+            dropped_messages = [m for turn in turns_to_drop for m in turn]
+            self._flush_expiring_context(dropped_messages)
 
-        return messages
+        # Flatten remaining turns back into a flat message list
+        return [m for turn in turns for m in turn]
 
     # ─── Pre-Compaction Flush ─────────────────────────────────
 
@@ -540,6 +593,23 @@ class Agent:
                 content = msg.get("content", "")
                 if not content:
                     continue
+
+                # Convert structured content (tool_use blocks, tool_results) to text
+                if isinstance(content, list):
+                    parts = []
+                    for block in content:
+                        if isinstance(block, dict):
+                            if block.get("type") == "text":
+                                parts.append(block.get("text", ""))
+                            elif block.get("type") == "tool_use":
+                                parts.append(f"[tool_call: {block.get('name', '?')}({json.dumps(block.get('input', {}))[:200]})]")
+                            elif block.get("type") == "tool_result":
+                                result_text = str(block.get("content", ""))[:500]
+                                parts.append(f"[tool_result: {result_text}]")
+                    content = " ".join(parts)
+                elif not isinstance(content, str):
+                    content = str(content)
+
                 # Truncate very long messages (tool results can be huge)
                 if len(content) > 1000:
                     content = content[:1000] + "... [truncated]"
@@ -708,6 +778,53 @@ class Agent:
 
         return "\n".join(parts)
 
+    # ─── Message Serialization Helpers ─────────────────────
+
+    @staticmethod
+    def _serialize_content(content):
+        """
+        Serialize Anthropic SDK content blocks to plain dicts for JSON storage.
+
+        Handles:
+        - str content → pass through
+        - list of SDK objects (TextBlock, ToolUseBlock) → list of dicts
+        - list of dicts (already serialized or tool_result) → pass through
+        """
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            result = []
+            for block in content:
+                if isinstance(block, dict):
+                    result.append(block)
+                elif hasattr(block, "model_dump"):
+                    # Anthropic SDK object (TextBlock, ToolUseBlock, etc.)
+                    result.append(block.model_dump())
+                else:
+                    result.append(block)
+            return result
+        return content
+
+    @staticmethod
+    def _estimate_content_chars(content) -> int:
+        """Estimate character count for content (string or list of blocks)."""
+        if isinstance(content, str):
+            return len(content)
+        if isinstance(content, list):
+            total = 0
+            for block in content:
+                if isinstance(block, dict):
+                    # tool_result, text block, or tool_use block
+                    total += len(str(block.get("content", "")))
+                    total += len(str(block.get("text", "")))
+                    total += len(str(block.get("input", "")))
+                elif isinstance(block, str):
+                    total += len(block)
+                elif hasattr(block, "text"):
+                    total += len(getattr(block, "text", ""))
+            return total
+        return 0
+
     # Tools the LLM must never see (user-only tools)
     _INTERNAL_TOOLS = {"run_command_approve"}
 
@@ -767,17 +884,19 @@ class Agent:
             use_tools = len(available_tools) > 0
 
             # Step 4: Run the LLM loop (may involve multiple tool calls)
-            # Returns (response_text, tool_call_count, input_tokens, output_tokens)
+            # Returns (response_text, tool_call_count, input_tokens, output_tokens, new_messages)
+            # new_messages contains the FULL chain: user → [assistant+tool_use → tool_result]* → final assistant
             if self.llm.provider == "anthropic":
-                response, tool_call_count, input_tokens, output_tokens = \
+                response, tool_call_count, input_tokens, output_tokens, new_messages = \
                     self._run_anthropic_loop(message, full_system, available_tools)
             else:
-                response, tool_call_count, input_tokens, output_tokens = \
+                response, tool_call_count, input_tokens, output_tokens, new_messages = \
                     self._run_openai_loop(message, full_system, available_tools)
 
-            # Step 5: Add to conversation history and persist
-            self.history.append({"role": "user", "content": message})
-            self.history.append({"role": "assistant", "content": response})
+            # Step 5: Add FULL message chain to history (preserves tool calls)
+            # This is critical: the LLM needs to see its own tool calls in prior turns
+            # to maintain the "I must call tools to perform actions" behavior pattern.
+            self.history.extend(new_messages)
 
             # Trim if we've grown past the window, then save to disk
             self.history = self._trim_history(self.history)
@@ -806,17 +925,22 @@ class Agent:
             logger.error(f"{self.config.name}: error after {elapsed_ms}ms: {e}")
             raise
 
-    def _run_anthropic_loop(self, message: str, system: str, tool_names: list[str]) -> tuple[str, int, int, int]:
+    def _run_anthropic_loop(self, message: str, system: str, tool_names: list[str]) -> tuple[str, int, int, int, list[dict]]:
         """
         Agent loop using Anthropic's native tool_use API.
 
         Returns:
-            (response_text, tool_call_count, total_input_tokens, total_output_tokens)
+            (response_text, tool_call_count, total_input_tokens, total_output_tokens, new_messages)
+            new_messages: all messages added this turn (user + tool calls + tool results + final assistant)
+                          — serialized to plain dicts for JSON persistence.
         """
         import anthropic
 
         messages = list(self.history)
         messages.append({"role": "user", "content": message})
+
+        # Track which messages are NEW this turn (for persisting to history)
+        history_start_idx = len(self.history)
 
         tools = self.registry.schemas(tool_names, format="anthropic") if tool_names else []
 
@@ -869,22 +993,52 @@ class Agent:
             else:
                 # Final text response
                 text_parts = [b.text for b in response.content if hasattr(b, "text")]
-                return "\n".join(text_parts), tool_call_count, total_input_tokens, total_output_tokens
+                response_text = "\n".join(text_parts)
 
-        return "Error: Max tool rounds exceeded", tool_call_count, total_input_tokens, total_output_tokens
+                # Append the final assistant text message
+                messages.append({"role": "assistant", "content": response_text})
 
-    def _run_openai_loop(self, message: str, system: str, tool_names: list[str]) -> tuple[str, int, int, int]:
+                # Extract and serialize all NEW messages from this turn
+                new_messages = []
+                for msg in messages[history_start_idx:]:
+                    new_messages.append({
+                        "role": msg["role"],
+                        "content": self._serialize_content(msg["content"]),
+                    })
+
+                return response_text, tool_call_count, total_input_tokens, total_output_tokens, new_messages
+
+        # Max rounds exceeded — still return what we have
+        new_messages = []
+        for msg in messages[history_start_idx:]:
+            new_messages.append({
+                "role": msg["role"],
+                "content": self._serialize_content(msg["content"]),
+            })
+        return "Error: Max tool rounds exceeded", tool_call_count, total_input_tokens, total_output_tokens, new_messages
+
+    def _run_openai_loop(self, message: str, system: str, tool_names: list[str]) -> tuple[str, int, int, int, list[dict]]:
         """
         Agent loop using OpenAI-compatible API (xAI, OpenAI, Ollama).
 
         Returns:
-            (response_text, tool_call_count, total_input_tokens, total_output_tokens)
+            (response_text, tool_call_count, total_input_tokens, total_output_tokens, new_messages)
+            new_messages: all messages added this turn (user + tool calls + tool results + final assistant)
+                          — plain dicts ready for JSON persistence.
         """
         messages = []
         if system:
             messages.append({"role": "system", "content": system})
-        messages.extend(self.history)
+
+        # OpenAI format: history may contain "tool" role messages from prior turns.
+        # Filter those out when building the API messages — OpenAI needs the
+        # full assistant+tool_calls message before any tool-role messages.
+        messages.extend(self._openai_history_messages())
         messages.append({"role": "user", "content": message})
+
+        # Track where new messages start (after system + history + user)
+        # For history purposes, we only want the user message onward
+        new_messages = [{"role": "user", "content": message}]
 
         tools = self.registry.schemas(tool_names, format="openai") if tool_names else None
 
@@ -922,9 +1076,9 @@ class Agent:
                     result = json.loads(resp.read().decode("utf-8"))
             except urllib.error.HTTPError as e:
                 body = e.read().decode("utf-8", errors="replace")
-                return f"LLM Error ({e.code}): {body}", tool_call_count, total_input_tokens, total_output_tokens
+                return f"LLM Error ({e.code}): {body}", tool_call_count, total_input_tokens, total_output_tokens, new_messages
             except urllib.error.URLError as e:
-                return f"Connection error: {e.reason}", tool_call_count, total_input_tokens, total_output_tokens
+                return f"Connection error: {e.reason}", tool_call_count, total_input_tokens, total_output_tokens, new_messages
 
             # Accumulate token usage
             usage = result.get("usage", {})
@@ -937,6 +1091,7 @@ class Agent:
             # Check for tool calls
             if msg.get("tool_calls"):
                 messages.append(msg)
+                new_messages.append(msg)  # Preserve assistant+tool_calls message
 
                 for tc in msg["tool_calls"]:
                     fn_name = tc["function"]["name"]
@@ -948,16 +1103,36 @@ class Agent:
                     if tool_result and (tool_result.startswith("Error") or "HTTP 4" in tool_result[:20] or "HTTP 5" in tool_result[:20]):
                         logger.warning(f"{self.config.name}: tool {fn_name} returned: {tool_result[:200]}")
 
-                    messages.append({
+                    tool_msg = {
                         "role": "tool",
                         "tool_call_id": tc["id"],
                         "content": tool_result,
-                    })
+                    }
+                    messages.append(tool_msg)
+                    new_messages.append(tool_msg)
                 continue  # Loop back
             else:
-                return msg.get("content", ""), tool_call_count, total_input_tokens, total_output_tokens
+                response_text = msg.get("content", "")
+                final_msg = {"role": "assistant", "content": response_text}
+                new_messages.append(final_msg)
+                return response_text, tool_call_count, total_input_tokens, total_output_tokens, new_messages
 
-        return "Error: Max tool rounds exceeded", tool_call_count, total_input_tokens, total_output_tokens
+        return "Error: Max tool rounds exceeded", tool_call_count, total_input_tokens, total_output_tokens, new_messages
+
+    def _openai_history_messages(self) -> list[dict]:
+        """
+        Build OpenAI-format history messages from self.history.
+
+        OpenAI format requires that tool-role messages follow their
+        corresponding assistant message with tool_calls. Our history
+        already stores them in the correct order.
+        """
+        msgs = []
+        for msg in self.history:
+            role = msg.get("role")
+            if role in ("user", "assistant", "tool"):
+                msgs.append(msg)
+        return msgs
 
     def run_stream(self, message: str, context: dict = None):
         """
@@ -1108,7 +1283,7 @@ class Agent:
         return {
             **self._session_meta,
             "history_length": len(self.history),
-            "turns": len(self.history) // 2,
+            "turns": sum(1 for m in self.history if m.get("role") == "user" and isinstance(m.get("content"), str)),
         }
 
     # ─── Session Management ──────────────────────────────────
