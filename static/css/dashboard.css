@@ -509,6 +509,58 @@ body {
 }
 
 /* ═══════════════════════════════════════
+   RUN NOW BUTTON (schedules table)
+   ═══════════════════════════════════════ */
+
+.run-btn {
+  background: none;
+  border: 1px solid transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  padding: 3px 8px;
+  border-radius: var(--radius);
+  font-size: 11px;
+  transition: var(--transition);
+  line-height: 1;
+}
+.run-btn:hover:not(:disabled) {
+  color: var(--green);
+  border-color: rgba(34, 197, 94, 0.3);
+  background: rgba(34, 197, 94, 0.08);
+}
+.run-btn:disabled {
+  opacity: 0.25;
+  cursor: default;
+}
+.run-btn--running {
+  color: var(--orange);
+  border-color: rgba(249, 115, 22, 0.3);
+  background: rgba(249, 115, 22, 0.08);
+}
+.run-btn--success {
+  color: var(--green) !important;
+  border-color: rgba(34, 197, 94, 0.3) !important;
+  background: rgba(34, 197, 94, 0.08) !important;
+}
+.run-btn--error {
+  color: var(--red) !important;
+  border-color: rgba(239, 68, 68, 0.3) !important;
+  background: rgba(239, 68, 68, 0.08) !important;
+}
+.run-spinner {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid var(--orange);
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: run-spin 0.6s linear infinite;
+}
+@keyframes run-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ═══════════════════════════════════════
    CONFIG MODAL
    ═══════════════════════════════════════ */
 

@@ -122,37 +122,79 @@ def is_bot_healthy() -> tuple[bool, str]:
     return True, f"healthy (PID {pid}, heartbeat {int(age)}s ago)"
 
 
-def stop_bot() -> bool:
-    """Stop the running Discord bot. Returns True if stopped, False if not running."""
-    pid = is_bot_running()
-    if pid is None:
-        return False
+def _kill_and_wait(pid: int, timeout: float = 5.0) -> bool:
+    """Send SIGTERM, wait up to *timeout* seconds, escalate to SIGKILL.
+
+    Returns True if the process is confirmed dead.
+    """
     try:
         os.kill(pid, signal.SIGTERM)
-        # Wait briefly for clean shutdown
-        for _ in range(40):  # 4 seconds max
-            time.sleep(0.1)
-            try:
-                os.kill(pid, 0)
-            except ProcessLookupError:
-                break
-        else:
-            # Process didn't exit gracefully — force kill
-            try:
-                os.kill(pid, signal.SIGKILL)
-                time.sleep(0.2)
-            except ProcessLookupError:
-                pass
-
-        PID_FILE.unlink(missing_ok=True)
-        HEARTBEAT_FILE.unlink(missing_ok=True)
-        return True
     except ProcessLookupError:
-        PID_FILE.unlink(missing_ok=True)
-        HEARTBEAT_FILE.unlink(missing_ok=True)
         return True
     except PermissionError:
         return False
+
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        time.sleep(0.1)
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+
+    # Still alive — force kill
+    try:
+        os.kill(pid, signal.SIGKILL)
+        time.sleep(0.3)
+    except ProcessLookupError:
+        pass
+    return True
+
+
+def _find_daemon_pids() -> list[int]:
+    """Find all running Alfred daemon-child processes by scanning /proc (macOS: ps).
+
+    Returns a list of PIDs (may be empty).  Never includes the current process.
+    """
+    import subprocess as _sp
+    my_pid = os.getpid()
+    try:
+        out = _sp.check_output(
+            ["pgrep", "-f", "__main__.py start --daemon-child"],
+            text=True,
+        )
+        return [int(p) for p in out.strip().split("\n") if p.strip() and int(p) != my_pid]
+    except (_sp.CalledProcessError, FileNotFoundError, ValueError):
+        return []
+
+
+def stop_bot() -> bool:
+    """Stop all running Alfred daemon processes.
+
+    1. Kill the PID recorded in the PID file (primary).
+    2. Scan for any other daemon-child processes that may have been orphaned
+       (e.g. during a reload race) and kill those too.
+    3. Clean up PID and heartbeat files.
+    """
+    pid = is_bot_running()
+    killed_any = False
+
+    # Kill the primary PID from the file
+    if pid is not None:
+        killed_any = _kill_and_wait(pid)
+
+    # Scan for any orphaned daemon-child processes the PID file missed
+    orphans = _find_daemon_pids()
+    for opid in orphans:
+        if opid != pid:  # don't double-kill
+            _kill_and_wait(opid)
+            killed_any = True
+
+    # Clean up
+    PID_FILE.unlink(missing_ok=True)
+    HEARTBEAT_FILE.unlink(missing_ok=True)
+
+    return killed_any
 
 
 class RateLimiter:
@@ -646,6 +688,46 @@ class DiscordBot:
         while not self._client.is_closed():
             write_heartbeat()
             await asyncio.sleep(HEARTBEAT_INTERVAL)
+
+    def post_to_agent_channel(self, agent_name: str, text: str) -> bool:
+        """Post a message to the Discord channel mapped to an agent.
+
+        Thread-safe — can be called from scheduler threads. Bridges into
+        discord.py's async event loop via run_coroutine_threadsafe.
+        """
+        if not text:
+            return False
+
+        # Find the channel mapped to this agent
+        channel_id = None
+        for ch_id, ch_cfg in self._channel_configs.items():
+            if ch_cfg.get("agent") == agent_name:
+                channel_id = ch_id
+                break
+
+        if channel_id is None:
+            logger.debug(f"No Discord channel mapped to agent '{agent_name}'")
+            return False
+
+        loop = getattr(self._client, "loop", None)
+        if not loop or not loop.is_running():
+            logger.debug("Discord event loop not running, skipping post")
+            return False
+
+        channel = self._client.get_channel(channel_id)
+        if not channel:
+            logger.warning(f"Discord channel {channel_id} not found (bot may not be ready)")
+            return False
+
+        try:
+            future = asyncio.run_coroutine_threadsafe(
+                self._send_response(channel, text), loop
+            )
+            future.result(timeout=30)
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to post to Discord channel {channel_id}: {e}")
+            return False
 
     def run(self, foreground: bool = True):
         """

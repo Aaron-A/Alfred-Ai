@@ -427,6 +427,36 @@ class Scheduler:
         }
         return len(self._active_tasks)
 
+    def trigger_now(self, agent_name: str, schedule_id: str) -> dict:
+        """Manually trigger a schedule to run immediately (non-blocking).
+
+        Returns a dict with status: started | already_running | not_found | no_runner
+        """
+        schedule = get_schedule(agent_name, schedule_id)
+        if not schedule:
+            return {"status": "not_found", "agent": agent_name, "schedule_id": schedule_id}
+
+        if not self._runner:
+            return {"status": "no_runner", "agent": agent_name, "schedule_id": schedule_id}
+
+        # Clean up finished threads
+        self._active_tasks = {
+            sid: t for sid, t in self._active_tasks.items() if t.is_alive()
+        }
+
+        if schedule_id in self._active_tasks:
+            return {"status": "already_running", "agent": agent_name, "schedule_id": schedule_id}
+
+        # Reuse the existing _execute_schedule — same threading, retries, result recording
+        self._execute_schedule(agent_name, schedule, is_catchup=False)
+
+        return {"status": "started", "agent": agent_name, "schedule_id": schedule_id}
+
+    def is_schedule_running(self, schedule_id: str) -> bool:
+        """Check if a specific schedule is currently executing."""
+        thread = self._active_tasks.get(schedule_id)
+        return thread is not None and thread.is_alive()
+
     def _loop(self):
         """Main scheduler loop — checks every 30 seconds."""
         while self._running:

@@ -465,6 +465,35 @@ def create_app() -> FastAPI:
 
         return {"agent": name, "schedules": result}
 
+    @app.post("/v1/agents/{name}/schedules/{schedule_id}/run")
+    async def trigger_schedule_now(name: str, schedule_id: str):
+        """Manually trigger a scheduled task to run immediately."""
+        cfg = _load_config()
+        if name not in cfg.get("agents", {}):
+            raise HTTPException(status_code=404, detail=f"Agent '{name}' not found.")
+
+        scheduler = getattr(app.state, "scheduler", None)
+        if not scheduler:
+            raise HTTPException(status_code=503, detail="Scheduler not available.")
+
+        result = scheduler.trigger_now(name, schedule_id)
+
+        if result["status"] == "not_found":
+            raise HTTPException(status_code=404, detail=f"Schedule '{schedule_id}' not found.")
+        if result["status"] == "no_runner":
+            raise HTTPException(status_code=503, detail="No agent runner configured.")
+        if result["status"] == "already_running":
+            raise HTTPException(status_code=409, detail=f"Schedule '{schedule_id}' is already running.")
+
+        return result
+
+    @app.get("/v1/agents/{name}/schedules/{schedule_id}/status")
+    async def get_schedule_run_status(name: str, schedule_id: str):
+        """Check if a specific schedule is currently running."""
+        scheduler = getattr(app.state, "scheduler", None)
+        running = scheduler.is_schedule_running(schedule_id) if scheduler else False
+        return {"agent": name, "schedule_id": schedule_id, "running": running}
+
     # ─── Sessions ────────────────────────────────────────
 
     @app.get("/v1/sessions/{agent_name}")
@@ -1018,7 +1047,27 @@ def create_app() -> FastAPI:
             logger.info("New daemon process spawned for restart")
 
             # Schedule self-termination after a short delay so the
-            # HTTP response is sent back to the client first
+            # HTTP response is sent back to the client first.
+            # SIGTERM lets discord.py attempt a graceful close;
+            # a daemon thread escalates to SIGKILL after 5s to
+            # prevent a zombie that holds the port.
+            import threading as _threading
+
+            def _force_kill_fallback():
+                """Daemon thread — runs even after SIGTERM tears down asyncio."""
+                import time as _time
+                _time.sleep(6)  # 0.5s delay + 5s grace
+                try:
+                    os.kill(pid, 0)
+                    logger.warning(f"PID {pid} still alive after SIGTERM, sending SIGKILL")
+                    os.kill(pid, signal.SIGKILL)
+                except (ProcessLookupError, OSError):
+                    pass  # already dead
+
+            _threading.Thread(
+                target=_force_kill_fallback, daemon=True, name="reload-kill"
+            ).start()
+
             async def _delayed_shutdown():
                 await asyncio.sleep(0.5)
                 logger.info(f"Sending SIGTERM to self (PID {pid}) for restart")

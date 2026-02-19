@@ -2273,15 +2273,28 @@ def cmd_start(foreground: bool = False, _daemon_child: bool = False, port: int =
 
     # Check PID file (skip if we ARE the daemon child)
     pid_file = Path(__file__).parent / "data" / "discord.pid"
-    if not _daemon_child and pid_file.exists():
-        try:
-            existing_pid = int(pid_file.read_text().strip())
-            os.kill(existing_pid, 0)  # Check if alive
-            console.print(f"\n  [yellow]Alfred is already running (PID {existing_pid}).[/]")
-            console.print("  Stop it first: [bold]alfred stop[/]\n")
-            return
-        except (ValueError, ProcessLookupError, PermissionError):
-            pid_file.unlink(missing_ok=True)
+    if not _daemon_child:
+        # Check PID file first
+        if pid_file.exists():
+            try:
+                existing_pid = int(pid_file.read_text().strip())
+                os.kill(existing_pid, 0)  # Check if alive
+                console.print(f"\n  [yellow]Alfred is already running (PID {existing_pid}).[/]")
+                console.print("  Stop it first: [bold]alfred stop[/]\n")
+                return
+            except (ValueError, ProcessLookupError, PermissionError):
+                pid_file.unlink(missing_ok=True)
+
+        # Also scan for orphaned daemon-child processes not in the PID file
+        from core.discord import _find_daemon_pids
+        orphans = _find_daemon_pids()
+        if orphans:
+            console.print(f"\n  [yellow]Found orphaned Alfred process(es): {orphans}[/]")
+            console.print("  Cleaning up...")
+            from core.discord import _kill_and_wait
+            for opid in orphans:
+                _kill_and_wait(opid)
+            console.print("  [green]Done.[/]\n")
 
     if foreground or _daemon_child:
         # Direct run — import and start services
@@ -2290,6 +2303,8 @@ def cmd_start(foreground: bool = False, _daemon_child: bool = False, port: int =
         from core.config import _load_config as _reload_config
         from core.logging import setup_logging
         from pathlib import Path as _Path
+
+        _discord_bot = [None]  # mutable ref so _run_agent_task can access bot lazily
 
         def _run_agent_task(agent_name: str, task: str) -> str:
             """Scheduler callback — creates an agent and runs a task."""
@@ -2310,11 +2325,16 @@ def cmd_start(foreground: bool = False, _daemon_child: bool = False, port: int =
 
             agent_config = AgentConfig.from_dict(agent_data)
             agent = Agent(agent_config)
-            return agent.run(task)
+            result = agent.run(task)
 
-        # ── 0. Write PID file (daemon child writes its own for reload restarts) ──
-        if _daemon_child:
-            pid_file.write_text(str(os.getpid()))
+            # Post the agent's response to its mapped Discord channel
+            if _discord_bot[0] and result:
+                try:
+                    _discord_bot[0].post_to_agent_channel(agent_name, result)
+                except Exception:
+                    pass  # Don't let Discord failures kill the scheduled task
+
+            return result
 
         # ── 1. Scheduler (background thread) ──
         scheduler = Scheduler(agent_runner=_run_agent_task)
@@ -2334,7 +2354,14 @@ def cmd_start(foreground: bool = False, _daemon_child: bool = False, port: int =
                         break  # Port is free
                 import time as _t; _t.sleep(1)
 
+            # Write PID file AFTER the old daemon is gone (port freed).
+            # This avoids a race where alfred stop kills us while the
+            # old process is still alive.
+            if _daemon_child:
+                pid_file.write_text(str(os.getpid()))
+
             app = create_app()
+            app.state.scheduler = scheduler
             uvi_config = uvicorn.Config(
                 app, host="0.0.0.0", port=port,
                 log_level="warning" if _daemon_child else "info",
@@ -2344,13 +2371,16 @@ def cmd_start(foreground: bool = False, _daemon_child: bool = False, port: int =
             api_thread.start()
             api_started = True
         except ImportError:
-            pass  # uvicorn not installed — skip API
+            # No uvicorn — still need to write PID file
+            if _daemon_child:
+                pid_file.write_text(str(os.getpid()))
 
         # ── 3. Main blocking service ──
         if has_discord:
             from core.discord import DiscordBot
 
             bot = DiscordBot()
+            _discord_bot[0] = bot  # allow scheduler tasks to post to Discord
 
             if not _daemon_child:
                 services = []
@@ -2385,10 +2415,11 @@ def cmd_start(foreground: bool = False, _daemon_child: bool = False, port: int =
                 console.print(f"  Press Ctrl+C to stop.\n")
 
             # Write PID file so 'alfred stop' can find us
-            data_dir = Path(__file__).parent / "data"
-            data_dir.mkdir(parents=True, exist_ok=True)
-            _pid_file = data_dir / "discord.pid"
-            _pid_file.write_text(str(os.getpid()))
+            # (daemon-child already wrote it after port wait; foreground needs it here)
+            _pid_file = pid_file  # reuse the pid_file from outer scope
+            if not _daemon_child:
+                pid_file.parent.mkdir(parents=True, exist_ok=True)
+                pid_file.write_text(str(os.getpid()))
 
             def _shutdown(signum, frame):
                 raise SystemExit(0)
@@ -2403,7 +2434,12 @@ def cmd_start(foreground: bool = False, _daemon_child: bool = False, port: int =
                 if not _daemon_child:
                     console.print("\n  Shutting down...")
             finally:
-                _pid_file.unlink(missing_ok=True)
+                # Only remove PID file if it still belongs to us (reload safety)
+                try:
+                    if _pid_file.exists() and int(_pid_file.read_text().strip()) == os.getpid():
+                        _pid_file.unlink(missing_ok=True)
+                except (ValueError, OSError):
+                    _pid_file.unlink(missing_ok=True)
                 scheduler.stop()
     else:
         # Daemon mode — spawn a clean subprocess (lancedb is not fork-safe)

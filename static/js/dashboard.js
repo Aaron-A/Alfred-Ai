@@ -671,7 +671,7 @@ function renderSchedulesTable() {
   }
 
   if (!allSchedules.length) {
-    tbody.innerHTML = '<tr><td colspan="8" class="empty-state">No schedules configured. Run: alfred agent schedule add &lt;name&gt;</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="9" class="empty-state">No schedules configured. Run: alfred agent schedule add &lt;name&gt;</td></tr>';
     return;
   }
 
@@ -701,6 +701,18 @@ function renderSchedulesTable() {
     // Next run
     const nextRun = s.next_run ? fmtRelative_future(s.next_run) : '<span class="text-dim">\u2014</span>';
 
+    // Run Now button
+    const runId = `run-btn-${s.agent_name}-${s.id}`;
+    const isRunning = s._running;
+    let runBtn;
+    if (!s.enabled) {
+      runBtn = '<button class="run-btn" disabled title="Schedule is paused">&#9654;</button>';
+    } else if (isRunning) {
+      runBtn = `<button class="run-btn run-btn--running" id="${runId}" disabled><span class="run-spinner"></span></button>`;
+    } else {
+      runBtn = `<button class="run-btn" id="${runId}" onclick="runScheduleNow('${escHtml(s.agent_name)}','${escHtml(s.id)}')" title="Run now">&#9654;</button>`;
+    }
+
     html += `<tr>
       <td class="fw-600" style="color:#fff;">${escHtml(s.agent_name)}</td>
       <td style="color:var(--cyan);">${escHtml(s.id)}</td>
@@ -710,6 +722,7 @@ function renderSchedulesTable() {
       <td>${runsHtml}</td>
       <td>${lastRun}</td>
       <td>${nextRun}</td>
+      <td>${runBtn}</td>
     </tr>`;
   }
 
@@ -727,6 +740,69 @@ function fmtRelative_future(iso) {
   if (hrs < 24) return `<span class="text-green">${hrs}h ${remainMins}m</span>`;
   const days = Math.floor(hrs / 24);
   return `<span class="text-green">${days}d ${hrs % 24}h</span>`;
+}
+
+// ─── Schedule: Run Now ───────────────────────────
+
+async function runScheduleNow(agentName, scheduleId) {
+  const btnId = `run-btn-${agentName}-${scheduleId}`;
+  const btn = document.getElementById(btnId);
+  if (!btn || btn.disabled) return;
+
+  // Show spinner
+  btn.disabled = true;
+  btn.innerHTML = '<span class="run-spinner"></span>';
+  btn.classList.add('run-btn--running');
+  _markScheduleRunning(agentName, scheduleId, true);
+
+  const result = await postJSON(`/v1/agents/${agentName}/schedules/${scheduleId}/run`);
+
+  if (result && !result._error) {
+    // Started — poll for completion
+    _pollScheduleDone(agentName, scheduleId, btn);
+  } else {
+    // Failed to start
+    btn.innerHTML = '\u2717';
+    btn.classList.remove('run-btn--running');
+    btn.classList.add('run-btn--error');
+    btn.title = result?._error || 'Failed to trigger';
+    _markScheduleRunning(agentName, scheduleId, false);
+    setTimeout(() => { btn.innerHTML = '\u25b6'; btn.disabled = false; btn.classList.remove('run-btn--error'); btn.title = 'Run now'; }, 3000);
+  }
+}
+
+function _markScheduleRunning(agentName, scheduleId, running) {
+  const scheds = state.schedules[agentName];
+  if (!scheds) return;
+  const s = scheds.find(x => x.id === scheduleId);
+  if (s) s._running = running;
+}
+
+function _pollScheduleDone(agentName, scheduleId, btn) {
+  let attempts = 0;
+  const iv = setInterval(async () => {
+    attempts++;
+    const st = await fetchJSON(`/v1/agents/${agentName}/schedules/${scheduleId}/status`);
+
+    if (st && !st.running) {
+      clearInterval(iv);
+      btn.innerHTML = '\u2713';
+      btn.classList.remove('run-btn--running');
+      btn.classList.add('run-btn--success');
+      _markScheduleRunning(agentName, scheduleId, false);
+      await refreshData();
+      setTimeout(() => { btn.innerHTML = '\u25b6'; btn.disabled = false; btn.classList.remove('run-btn--success'); btn.title = 'Run now'; }, 2000);
+    }
+
+    if (attempts >= 120) {
+      clearInterval(iv);
+      btn.innerHTML = '?';
+      btn.classList.remove('run-btn--running');
+      btn.title = 'Timed out waiting for completion';
+      _markScheduleRunning(agentName, scheduleId, false);
+      setTimeout(() => { btn.innerHTML = '\u25b6'; btn.disabled = false; btn.title = 'Run now'; }, 3000);
+    }
+  }, 1000);
 }
 
 // ─── Render: Metrics Cards ────────────────────────
