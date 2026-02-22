@@ -451,6 +451,7 @@ Ollama runs on `localhost:11434` using OpenAI-compatible APIs. Supported models 
 
 ## Requirements
 
+- macOS or Linux (Windows via WSL)
 - Python 3.10+
 - [uv](https://docs.astral.sh/uv/) (recommended) or pip
 - An API key from a supported LLM provider (Anthropic, xAI, OpenAI)
