@@ -194,6 +194,9 @@ alfred-ai/
       dashboard.css     Dark theme styles
     js/
       dashboard.js      API fetching, rendering, modals, auto-refresh
+  images/
+    alfredarch.png      System architecture diagram
+    agentflow.png       Agent execution flow diagram
 ```
 
 ### Key Concepts
