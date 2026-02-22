@@ -1250,7 +1250,12 @@ function renderTradingStatusCards(data) {
     const returnPct = ((totalPnl / initialEquity) * 100).toFixed(2);
     pnlEl.textContent = (totalPnl >= 0 ? '+' : '') + fmtUSD(totalPnl);
     pnlEl.style.color = totalPnl >= 0 ? 'var(--green)' : 'var(--red)';
-    pnlSub.textContent = `${returnPct}% return` + (tradeCount > 0 ? ` | ${tradeCount} trades` : '');
+    // Sum estimated commissions from trade data
+    const totalComm = trades.reduce((sum, t) => sum + parseFloat(t.commission || 0), 0);
+    let subText = `${returnPct}% return`;
+    if (tradeCount > 0) subText += ` | ${tradeCount} trades`;
+    if (totalComm > 0) subText += ` | $${totalComm.toFixed(2)} fees`;
+    pnlSub.textContent = subText;
   } else {
     pnlEl.textContent = '$0.00';
     pnlEl.style.color = 'var(--text-dim)';
@@ -1441,6 +1446,9 @@ function renderTradesTable(trades, assetType) {
       if (!isNaN(pnlNum)) {
         const pnlColor = pnlNum >= 0 ? 'text-green' : 'text-red';
         pnlHtml = `<span class="${pnlColor}">${pnlNum >= 0 ? '+' : ''}${fmtUSD(pnlNum)}</span>`;
+        if (t.commission) {
+          pnlHtml += `<div style="font-size:9px;color:var(--text-dim);margin-top:1px;">fee: $${parseFloat(t.commission).toFixed(2)}</div>`;
+        }
       }
     }
 

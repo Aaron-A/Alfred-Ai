@@ -1133,12 +1133,13 @@ def create_app() -> FastAPI:
 
     # ─── Trading Status ────────────────────────────────
 
-    def _merge_round_trips(all_trades: list[dict]) -> list[dict]:
+    def _merge_round_trips(all_trades: list[dict], asset_type: str = "crypto", comm_cfg: dict = None) -> list[dict]:
         """Merge entry+exit CSV rows into single round-trip rows.
 
         Computes P&L from actual entry/exit prices rather than trusting
         the CSV's pnl field (which can be wrong due to weighted-average
         cost basis contamination from historical seed trades).
+        Deducts IBKR Pro (Fixed) commissions from each round-trip.
         Handles partial closes by reducing current_entry qty.
         """
         merged = []
@@ -1199,13 +1200,20 @@ def create_app() -> FastAPI:
 
                 # Compute P&L from actual entry/exit prices (ground truth)
                 computed_pnl = None
+                rt_commission = 0.0
                 if current_entry and entry_price and exit_price:
                     if direction == "LONG":
-                        computed_pnl = (exit_price - entry_price) * exit_qty
+                        gross = (exit_price - entry_price) * exit_qty
                     else:
-                        computed_pnl = (entry_price - exit_price) * exit_qty
+                        gross = (entry_price - exit_price) * exit_qty
+                    # Deduct IBKR round-trip commissions
+                    if comm_cfg:
+                        entry_comm = _calc_trade_commission(exit_qty, entry_price, asset_type, comm_cfg)
+                        exit_comm = _calc_trade_commission(exit_qty, exit_price, asset_type, comm_cfg)
+                        rt_commission = entry_comm + exit_comm
+                    computed_pnl = gross - rt_commission
 
-                merged.append({
+                trade_row = {
                     "exit_time": t.get("timestamp_et") or t.get("timestamp_utc", ""),
                     "entry_time": entry_time,
                     "direction": direction,
@@ -1215,7 +1223,10 @@ def create_app() -> FastAPI:
                     "pnl": f"{computed_pnl:.2f}" if computed_pnl is not None else None,
                     "reason": t.get("reason", ""),
                     "status": "closed",
-                })
+                }
+                if rt_commission > 0:
+                    trade_row["commission"] = f"{rt_commission:.2f}"
+                merged.append(trade_row)
 
                 # Reduce position instead of wiping — handles partial closes
                 if current_entry:
@@ -1240,7 +1251,7 @@ def create_app() -> FastAPI:
 
         return merged
 
-    def _pair_orders_as_scalps(orders: list[dict]) -> list[dict]:
+    def _pair_orders_as_scalps(orders: list[dict], asset_type: str = "crypto", comm_cfg: dict = None) -> list[dict]:
         """Pair Alpaca closed orders into scalp round-trips with correct P&L.
 
         The bot maintains a base position and does sell→buy scalps.
@@ -1248,6 +1259,7 @@ def create_app() -> FastAPI:
         1. Skips the initial position-building phase (consecutive same-side orders)
         2. Pairs each exit (sell) with the next re-entry (buy) as one round-trip
         3. P&L = (sell_price - buy_price) * qty for LONG positions
+        4. Deducts IBKR Pro (Fixed) commissions from each round-trip
 
         This shows actual scalp performance including losses, unlike weighted-
         average accounting which always shows wins due to low initial cost basis.
@@ -1303,24 +1315,37 @@ def create_app() -> FastAPI:
                 rt_qty = min(pending_exit["qty"], qty)
                 if init_side == "buy":
                     # LONG: sold then bought back
-                    pnl = (pending_exit["price"] - price) * rt_qty
+                    gross = (pending_exit["price"] - price) * rt_qty
                     direction = "LONG"
+                    entry_px, exit_px = price, pending_exit["price"]
                 else:
                     # SHORT: bought then sold back
-                    pnl = (price - pending_exit["price"]) * rt_qty
+                    gross = (price - pending_exit["price"]) * rt_qty
                     direction = "SHORT"
+                    entry_px, exit_px = pending_exit["price"], price
 
-                trades.append({
+                # Deduct IBKR round-trip commissions
+                rt_commission = 0.0
+                if comm_cfg:
+                    entry_comm = _calc_trade_commission(rt_qty, entry_px, asset_type, comm_cfg)
+                    exit_comm = _calc_trade_commission(rt_qty, exit_px, asset_type, comm_cfg)
+                    rt_commission = entry_comm + exit_comm
+                pnl = gross - rt_commission
+
+                trade_row = {
                     "exit_time": pending_exit["time"],
                     "entry_time": ts,
                     "direction": direction,
-                    "entry_price": f"{price:.2f}" if init_side == "buy" else f"{pending_exit['price']:.2f}",
-                    "exit_price": f"{pending_exit['price']:.2f}" if init_side == "buy" else f"{price:.2f}",
+                    "entry_price": f"{entry_px:.2f}",
+                    "exit_price": f"{exit_px:.2f}",
                     "qty": f"{rt_qty:.5f}",
                     "pnl": f"{pnl:.2f}",
                     "reason": "",
                     "status": "closed",
-                })
+                }
+                if rt_commission > 0:
+                    trade_row["commission"] = f"{rt_commission:.2f}"
+                trades.append(trade_row)
                 pending_exit = None
 
         return trades
@@ -1329,19 +1354,41 @@ def create_app() -> FastAPI:
     _trading_caches: dict = {}  # keyed by agent name
     _TRADING_CACHE_TTL = 10  # seconds
 
+    def _calc_trade_commission(qty: float, price: float, asset_type: str, comm_cfg: dict) -> float:
+        """Calculate IBKR Pro (Fixed) commission for a single order leg.
+
+        Crypto: rate_pct of trade value (default 0.18%), min $1.75/order.
+        Stock:  per_share rate (default $0.005), min $1.00, max $9.79/order.
+        """
+        if not comm_cfg:
+            return 0.0
+        if asset_type == "stock":
+            per_share = comm_cfg.get("per_share", 0.005)
+            min_fee = comm_cfg.get("min_per_order", 1.00)
+            max_fee = comm_cfg.get("max_per_order", 9.79)
+            raw = abs(qty) * per_share
+            return max(min(raw, max_fee), min_fee)
+        else:
+            rate = comm_cfg.get("rate_pct", 0.0018)
+            min_fee = comm_cfg.get("min_per_order", 1.75)
+            trade_value = abs(qty * price)
+            return max(trade_value * rate, min_fee)
+
     def _get_trading_agent_info(agent_name: str) -> dict:
-        """Resolve trading agent metadata: service creds, symbol, asset type."""
+        """Resolve trading agent metadata: service creds, symbol, asset type, commission."""
         import json as _json
 
         cfg = _load_config()
 
-        # Read strategy config for asset_type
+        # Read strategy config for asset_type and commission
         strategy_file = config.PROJECT_ROOT / "workspaces" / agent_name / "bot" / "strategy_config.json"
         asset_type = "crypto"
+        comm_cfg = {}
         if strategy_file.exists():
             try:
                 strategy = _json.loads(strategy_file.read_text())
                 asset_type = strategy.get("asset_type", "crypto")
+                comm_cfg = strategy.get("commission", {})
             except Exception:
                 pass
 
@@ -1368,6 +1415,7 @@ def create_app() -> FastAPI:
             "asset_type": asset_type,
             "symbol": symbol,
             "creds": creds,
+            "commission": comm_cfg,
         }
 
     @app.get("/v1/trading/agents")
@@ -1423,6 +1471,7 @@ def create_app() -> FastAPI:
         asset_type = info["asset_type"]
         symbol = info["symbol"]
         creds = info["creds"]
+        comm_cfg = info.get("commission", {})
 
         result = {
             "account": None,
@@ -1571,7 +1620,7 @@ def create_app() -> FastAPI:
                         after_ts = page[-1]["created_at"]
 
                     if all_orders:
-                        result["trades"] = _pair_orders_as_scalps(all_orders)[-20:]
+                        result["trades"] = _pair_orders_as_scalps(all_orders, asset_type, comm_cfg)[-20:]
                         orders_ok = True
             except Exception as e:
                 logger.warning(f"Trading status ({agent}): orders fetch failed: {e}")
@@ -1584,7 +1633,7 @@ def create_app() -> FastAPI:
                         with open(trades_file) as f:
                             reader = csv.DictReader(f)
                             all_trades = list(reader)
-                        result["trades"] = _merge_round_trips(all_trades)[-20:]
+                        result["trades"] = _merge_round_trips(all_trades, asset_type, comm_cfg)[-20:]
                     except Exception:
                         pass
 
