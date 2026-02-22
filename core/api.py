@@ -1326,14 +1326,83 @@ def create_app() -> FastAPI:
         return trades
 
     # Cache for Alpaca API responses (avoid hammering on every 10s dashboard refresh)
-    _trading_cache: dict = {"data": None, "ts": 0.0}
+    _trading_caches: dict = {}  # keyed by agent name
     _TRADING_CACHE_TTL = 10  # seconds
 
+    def _get_trading_agent_info(agent_name: str) -> dict:
+        """Resolve trading agent metadata: service creds, symbol, asset type."""
+        import json as _json
+
+        cfg = _load_config()
+
+        # Read strategy config for asset_type
+        strategy_file = config.PROJECT_ROOT / "workspaces" / agent_name / "bot" / "strategy_config.json"
+        asset_type = "crypto"
+        if strategy_file.exists():
+            try:
+                strategy = _json.loads(strategy_file.read_text())
+                asset_type = strategy.get("asset_type", "crypto")
+            except Exception:
+                pass
+
+        # Determine symbol
+        if asset_type == "stock":
+            symbol = agent_name.replace("-trader", "").upper()
+        else:
+            symbol = "BTC/USD"
+
+        # Map agent → service credentials
+        # Convention: btc-trader → "alpaca", tsla-trader → "alpaca_tsla", xyz-trader → "alpaca_xyz"
+        suffix = agent_name.replace("-trader", "")
+        if suffix == "btc":
+            service_name = "alpaca"
+        else:
+            service_name = f"alpaca_{suffix}"
+
+        creds = cfg.get("services", {}).get(service_name, {})
+        if not creds:
+            # Fallback: try base "alpaca" service
+            creds = cfg.get("services", {}).get("alpaca", {})
+
+        return {
+            "asset_type": asset_type,
+            "symbol": symbol,
+            "creds": creds,
+        }
+
+    @app.get("/v1/trading/agents")
+    async def trading_agents():
+        """List all trading agents with their symbols and asset types."""
+        import json as _json
+
+        cfg = _load_config()
+        agents = []
+        for name in cfg.get("agents", {}):
+            strategy_file = config.PROJECT_ROOT / "workspaces" / name / "bot" / "strategy_config.json"
+            if strategy_file.exists():
+                try:
+                    strategy = _json.loads(strategy_file.read_text())
+                    asset_type = strategy.get("asset_type", "crypto")
+                    if asset_type == "stock":
+                        symbol = name.replace("-trader", "").upper()
+                    else:
+                        symbol = "BTC/USD"
+                    agents.append({
+                        "name": name,
+                        "symbol": symbol,
+                        "asset_type": asset_type,
+                        "display_name": name.upper(),
+                    })
+                except Exception:
+                    pass
+        return agents
+
     @app.get("/v1/trading/status")
-    async def trading_status(since: str = None):
-        """Return BTC trading bot status, account info, price bars, and trade history.
+    async def trading_status(agent: str = "btc-trader", since: str = None):
+        """Return trading bot status, account info, price bars, and trade history.
 
         Args:
+            agent: Trading agent name (e.g. 'btc-trader', 'tsla-trader')
             since: ISO timestamp for incremental bar loading. When provided,
                    only bars after this timestamp are returned (lightweight).
                    When omitted, returns last 7h of bars (initial load).
@@ -1342,9 +1411,16 @@ def create_app() -> FastAPI:
         import httpx
 
         now = time.time()
-        # Use cache only for full (non-incremental) requests
-        if not since and _trading_cache["data"] and (now - _trading_cache["ts"]) < _TRADING_CACHE_TTL:
-            return _trading_cache["data"]
+        # Per-agent cache — only for full (non-incremental) requests
+        agent_cache = _trading_caches.get(agent)
+        if not since and agent_cache and (now - agent_cache["ts"]) < _TRADING_CACHE_TTL:
+            return agent_cache["data"]
+
+        # Resolve agent info
+        info = _get_trading_agent_info(agent)
+        asset_type = info["asset_type"]
+        symbol = info["symbol"]
+        creds = info["creds"]
 
         result = {
             "account": None,
@@ -1353,10 +1429,13 @@ def create_app() -> FastAPI:
             "bars": [],
             "trades": [],
             "initial_equity": None,
+            "symbol": symbol,
+            "asset_type": asset_type,
+            "agent": agent,
         }
 
         # Check bot PID
-        pid_file = config.PROJECT_ROOT / "workspaces" / "btc-trader" / "bot" / "bot.pid"
+        pid_file = config.PROJECT_ROOT / "workspaces" / agent / "bot" / "bot.pid"
         if pid_file.exists():
             try:
                 pid = int(pid_file.read_text().strip())
@@ -1364,12 +1443,6 @@ def create_app() -> FastAPI:
                 result["bot_running"] = True
             except (ProcessLookupError, ValueError):
                 pass
-
-        # Get Alpaca credentials
-        creds = config.get_service_credentials("alpaca") if hasattr(config, "get_service_credentials") else {}
-        if not creds:
-            cfg = _load_config()
-            creds = cfg.get("services", {}).get("alpaca", {})
 
         api_key = creds.get("api_key", "")
         secret_key = creds.get("secret_key", "")
@@ -1384,7 +1457,7 @@ def create_app() -> FastAPI:
 
         if api_key:
             async with httpx.AsyncClient(timeout=10) as client:
-                # Account — independent try/except so failures don't block other calls
+                # Account
                 try:
                     resp = await client.get(f"{base_url}/v2/account", headers=headers)
                     if resp.status_code == 200:
@@ -1396,17 +1469,19 @@ def create_app() -> FastAPI:
                             "portfolio_value": acct.get("portfolio_value"),
                         }
                 except Exception as e:
-                    logger.warning(f"Trading status: account fetch failed: {e}")
+                    logger.warning(f"Trading status ({agent}): account fetch failed: {e}")
 
-                # Positions
+                # Positions — match by agent's symbol
                 try:
                     resp = await client.get(f"{base_url}/v2/positions", headers=headers)
                     if resp.status_code == 200:
                         for pos in resp.json():
-                            sym = pos.get("symbol", "")
-                            if "BTC" in sym:
+                            pos_sym = pos.get("symbol", "")
+                            # Match: "BTCUSD" contains "BTC", or exact match for stocks
+                            match = (symbol.replace("/", "") in pos_sym) if asset_type == "crypto" else (pos_sym == symbol)
+                            if match:
                                 result["position"] = {
-                                    "symbol": sym,
+                                    "symbol": pos_sym,
                                     "qty": pos.get("qty"),
                                     "side": pos.get("side"),
                                     "entry_price": pos.get("avg_entry_price"),
@@ -1417,31 +1492,48 @@ def create_app() -> FastAPI:
                                 }
                                 break
                 except Exception as e:
-                    logger.warning(f"Trading status: positions fetch failed: {e}")
+                    logger.warning(f"Trading status ({agent}): positions fetch failed: {e}")
 
-                # BTC bars — incremental if `since`, otherwise last 7h
+                # Price bars — dynamic endpoint based on asset type
                 try:
                     from datetime import datetime as _dt, timedelta as _td, timezone as _tz
                     if since:
                         bar_start = since
-                        bar_limit = "60"  # at most 60 new bars per incremental fetch
+                        bar_limit = "60"
                     else:
                         bar_start = (_dt.now(_tz.utc) - _td(hours=7, minutes=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
-                        bar_limit = "430"  # 7h + buffer
-                    resp = await client.get(
-                        f"{data_url}/v1beta3/crypto/us/bars",
-                        headers=headers,
-                        params={"symbols": "BTC/USD", "timeframe": "1Min", "limit": bar_limit, "sort": "asc", "start": bar_start},
-                    )
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        raw_bars = data.get("bars", {}).get("BTC/USD", [])
-                        result["bars"] = [
-                            {"t": b["t"], "o": b["o"], "h": b["h"], "l": b["l"], "c": b["c"], "v": b["v"]}
-                            for b in raw_bars
-                        ]
+                        bar_limit = "430"
+
+                    if asset_type == "stock":
+                        # Stock bars: /v2/stocks/{SYMBOL}/bars
+                        resp = await client.get(
+                            f"{data_url}/v2/stocks/{symbol}/bars",
+                            headers=headers,
+                            params={"timeframe": "5Min", "limit": bar_limit, "sort": "asc", "start": bar_start, "feed": "iex"},
+                        )
+                        if resp.status_code == 200:
+                            data = resp.json()
+                            raw_bars = data.get("bars", [])
+                            result["bars"] = [
+                                {"t": b["t"], "o": b["o"], "h": b["h"], "l": b["l"], "c": b["c"], "v": b["v"]}
+                                for b in raw_bars
+                            ]
+                    else:
+                        # Crypto bars: /v1beta3/crypto/us/bars
+                        resp = await client.get(
+                            f"{data_url}/v1beta3/crypto/us/bars",
+                            headers=headers,
+                            params={"symbols": symbol, "timeframe": "1Min", "limit": bar_limit, "sort": "asc", "start": bar_start},
+                        )
+                        if resp.status_code == 200:
+                            data = resp.json()
+                            raw_bars = data.get("bars", {}).get(symbol, [])
+                            result["bars"] = [
+                                {"t": b["t"], "o": b["o"], "h": b["h"], "l": b["l"], "c": b["c"], "v": b["v"]}
+                                for b in raw_bars
+                            ]
                 except Exception as e:
-                    logger.warning(f"Trading status: bars fetch failed: {e}")
+                    logger.warning(f"Trading status ({agent}): bars fetch failed: {e}")
 
         # Fetch closed orders from Alpaca and pair into scalp round-trips
         if api_key:
@@ -1449,7 +1541,6 @@ def create_app() -> FastAPI:
             try:
                 async with httpx.AsyncClient(timeout=10) as client2:
                     all_orders = []
-                    # Fetch up to 3 pages of 100 closed orders
                     after_ts = None
                     for _ in range(3):
                         params = {"status": "closed", "limit": "100", "direction": "asc"}
@@ -1461,7 +1552,7 @@ def create_app() -> FastAPI:
                             params=params,
                         )
                         if resp.status_code != 200:
-                            logger.warning(f"Trading status: orders fetch returned {resp.status_code}")
+                            logger.warning(f"Trading status ({agent}): orders fetch returned {resp.status_code}")
                             break
                         page = resp.json()
                         if not page:
@@ -1475,11 +1566,11 @@ def create_app() -> FastAPI:
                         result["trades"] = _pair_orders_as_scalps(all_orders)[-20:]
                         orders_ok = True
             except Exception as e:
-                logger.warning(f"Trading status: orders fetch failed: {e}")
+                logger.warning(f"Trading status ({agent}): orders fetch failed: {e}")
 
-            # Fallback to CSV if Alpaca fails
+            # Fallback to CSV
             if not orders_ok:
-                trades_file = config.PROJECT_ROOT / "workspaces" / "btc-trader" / "bot" / "trades_history.csv"
+                trades_file = config.PROJECT_ROOT / "workspaces" / agent / "bot" / "trades_history.csv"
                 if trades_file.exists():
                     try:
                         with open(trades_file) as f:
@@ -1490,8 +1581,7 @@ def create_app() -> FastAPI:
                         pass
 
         if not since:
-            _trading_cache["data"] = result
-            _trading_cache["ts"] = now
+            _trading_caches[agent] = {"data": result, "ts": now}
         return result
 
     @app.post("/v1/admin/reload")

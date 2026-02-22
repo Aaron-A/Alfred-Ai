@@ -95,7 +95,8 @@ def _discover_tools_from_dir(registry: ToolRegistry, tools_dir: Path, source: st
                 module.register(registry)
                 loaded.append(py_file.name)
             else:
-                logger.debug(f"{py_file.name} has no register() function, skipping")
+                logger.warning(f"{py_file.name} has no register() function — tool will NOT be available. "
+                             f"Add: def register(registry: ToolRegistry): ...")
 
         except Exception as e:
             logger.error(f"Error loading {py_file.name}: {e}")

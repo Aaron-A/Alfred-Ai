@@ -192,6 +192,9 @@
 <!-- ═════════ TRADING TAB ═════════ -->
 <div class="tab-panel" id="tab-trading">
 
+  <!-- Agent Selector -->
+  <div class="trading-agent-tabs" id="tradingAgentTabs"></div>
+
   <!-- Status Cards -->
   <div class="trading-status-grid" id="tradingStatusGrid">
     <div class="trading-card">
@@ -216,17 +219,17 @@
     </div>
   </div>
 
-  <!-- BTC Price Chart -->
+  <!-- Price Chart -->
   <div class="chart-container">
     <div class="chart-header">
-      <span class="section-title" style="margin:0;">BTC / USD</span>
+      <span class="section-title" style="margin:0;" id="chartSymbol">—</span>
       <div class="chart-price-group">
         <span class="chart-price" id="chartPrice">—</span>
         <span class="chart-change" id="chartChange"></span>
       </div>
-      <span class="chart-timeframe">1m bars</span>
+      <span class="chart-timeframe" id="chartTimeframe">bars</span>
     </div>
-    <canvas id="btcChart"></canvas>
+    <canvas id="tradingChart"></canvas>
   </div>
 
   <!-- Recent Trades -->

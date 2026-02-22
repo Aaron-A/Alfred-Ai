@@ -126,8 +126,8 @@ async function refreshData() {
   renderAll();
   updateRefreshInfo();
 
-  // Fetch trading data and vector queries (on every refresh, lightweight)
-  fetchTradingData();
+  // Fetch trading data for all agents and vector queries (on every refresh)
+  fetchAllTradingData();
   fetchVectorQueries();
 }
 
@@ -1058,50 +1058,113 @@ async function headerRestart() {
   }
 }
 
-// ─── Trading Tab ─────────────────────────────────
+// ─── Trading Tab (Multi-Agent) ───────────────────
 
-let tradingData = null;
-let barsBuffer = [];                 // accumulated bars across refreshes
-const MAX_BARS_HOURS = 7;            // keep last 7h of data
-const MAX_BARS = MAX_BARS_HOURS * 60; // 420 bars at 1-min
+// Per-agent trading state: { data, barsBuffer, meta }
+const tradingState = {};
+let tradingAgents = [];       // list from /v1/trading/agents
+let activeTradingAgent = '';  // currently displayed agent
+const MAX_BARS_HOURS = 7;
 
-async function fetchTradingData() {
-  // Incremental: only fetch bars since the last one we have
-  let url = '/v1/trading/status';
-  if (barsBuffer.length > 0) {
-    const lastT = barsBuffer[barsBuffer.length - 1].t;
-    url += '?since=' + encodeURIComponent(lastT);
+async function fetchTradingAgents() {
+  const agents = await fetchJSON('/v1/trading/agents');
+  if (!agents || !agents.length) return;
+  tradingAgents = agents;
+
+  // Default to first agent if none selected
+  if (!activeTradingAgent || !agents.find(a => a.name === activeTradingAgent)) {
+    activeTradingAgent = agents[0].name;
   }
 
-  tradingData = await fetchJSON(url);
-  if (!tradingData) return;
-
-  // Merge new bars into buffer
-  const newBars = tradingData.bars || [];
-  if (barsBuffer.length === 0) {
-    // Initial load — use full response
-    barsBuffer = newBars;
-  } else if (newBars.length > 0) {
-    // Incremental — append only bars with timestamps we don't have
-    const lastKnown = barsBuffer[barsBuffer.length - 1].t;
-    for (const bar of newBars) {
-      if (bar.t > lastKnown) barsBuffer.push(bar);
+  // Initialize state for each agent
+  for (const a of agents) {
+    if (!tradingState[a.name]) {
+      tradingState[a.name] = { data: null, barsBuffer: [] };
     }
   }
 
-  // Trim to keep only last 7h
-  if (barsBuffer.length > MAX_BARS) {
-    barsBuffer = barsBuffer.slice(-MAX_BARS);
+  renderTradingAgentTabs();
+}
+
+function renderTradingAgentTabs() {
+  const container = document.getElementById('tradingAgentTabs');
+  if (!container) return;
+
+  container.innerHTML = tradingAgents.map(a => {
+    const active = a.name === activeTradingAgent ? ' active' : '';
+    return `<button class="trading-agent-tab${active}" data-agent="${escHtml(a.name)}">${escHtml(a.display_name)}</button>`;
+  }).join('');
+
+  // Click handlers
+  container.querySelectorAll('.trading-agent-tab').forEach(btn => {
+    btn.addEventListener('click', () => {
+      activeTradingAgent = btn.dataset.agent;
+      container.querySelectorAll('.trading-agent-tab').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      renderTradingTab();
+    });
+  });
+}
+
+async function fetchAllTradingData() {
+  // Discover agents on first call
+  if (!tradingAgents.length) {
+    await fetchTradingAgents();
   }
+
+  // Fetch data for ALL agents in parallel (so tab switching is instant)
+  const promises = tradingAgents.map(a => fetchTradingDataForAgent(a.name));
+  await Promise.all(promises);
 
   renderTradingTab();
 }
 
+async function fetchTradingDataForAgent(agentName) {
+  const agentState = tradingState[agentName] || { data: null, barsBuffer: [] };
+  tradingState[agentName] = agentState;
+
+  // Incremental: only fetch bars since the last one we have
+  let url = `/v1/trading/status?agent=${encodeURIComponent(agentName)}`;
+  if (agentState.barsBuffer.length > 0) {
+    const lastT = agentState.barsBuffer[agentState.barsBuffer.length - 1].t;
+    url += '&since=' + encodeURIComponent(lastT);
+  }
+
+  const data = await fetchJSON(url);
+  if (!data) return;
+
+  agentState.data = data;
+
+  // Merge new bars into buffer
+  const newBars = data.bars || [];
+  if (agentState.barsBuffer.length === 0) {
+    agentState.barsBuffer = newBars;
+  } else if (newBars.length > 0) {
+    const lastKnown = agentState.barsBuffer[agentState.barsBuffer.length - 1].t;
+    for (const bar of newBars) {
+      if (bar.t > lastKnown) agentState.barsBuffer.push(bar);
+    }
+  }
+
+  // Trim: crypto 1m → 420 bars, stock 5m → 84 bars (7h)
+  const assetType = data.asset_type || 'crypto';
+  const barsPerHour = assetType === 'stock' ? 12 : 60;
+  const maxBars = MAX_BARS_HOURS * barsPerHour;
+  if (agentState.barsBuffer.length > maxBars) {
+    agentState.barsBuffer = agentState.barsBuffer.slice(-maxBars);
+  }
+}
+
 function renderTradingTab() {
-  if (!tradingData) return;
-  renderTradingStatusCards(tradingData);
-  renderBTCChart(barsBuffer);
-  renderTradesTable(tradingData.trades || []);
+  const agentState = tradingState[activeTradingAgent];
+  if (!agentState?.data) return;
+
+  const data = agentState.data;
+  const meta = tradingAgents.find(a => a.name === activeTradingAgent) || {};
+
+  renderTradingStatusCards(data);
+  renderTradingChart(agentState.barsBuffer, meta);
+  renderTradesTable(data.trades || [], data.asset_type);
 }
 
 function fmtUSD(val) {
@@ -1124,6 +1187,8 @@ function fmtTradeTime(isoStr) {
 }
 
 function renderTradingStatusCards(data) {
+  const assetType = data.asset_type || 'crypto';
+
   // Equity
   const equity = data.account?.equity;
   const eqEl = document.getElementById('tradingEquity');
@@ -1146,7 +1211,8 @@ function renderTradingStatusCards(data) {
   if (pos) {
     const qty = parseFloat(pos.qty || 0);
     const side = qty > 0 ? 'LONG' : qty < 0 ? 'SHORT' : 'FLAT';
-    posEl.textContent = `${side} ${Math.abs(qty).toFixed(4)}`;
+    const qtyStr = assetType === 'stock' ? Math.abs(qty).toFixed(0) : Math.abs(qty).toFixed(4);
+    posEl.textContent = `${side} ${qtyStr}`;
     const pl = parseFloat(pos.unrealized_pl || 0);
     posEl.style.color = pl >= 0 ? 'var(--green)' : 'var(--red)';
     const plStr = (pl >= 0 ? '+' : '') + fmtUSD(pl);
@@ -1192,14 +1258,22 @@ function renderTradingStatusCards(data) {
   }
 }
 
-function renderBTCChart(bars) {
-  const canvas = document.getElementById('btcChart');
+function renderTradingChart(bars, meta) {
+  const canvas = document.getElementById('tradingChart');
   if (!canvas || !bars.length) return;
+
+  const assetType = meta.asset_type || 'crypto';
+  const symbol = meta.symbol || '—';
+
+  // Update chart header
+  const symbolEl = document.getElementById('chartSymbol');
+  const timeframeEl = document.getElementById('chartTimeframe');
+  if (symbolEl) symbolEl.textContent = symbol.replace('/', ' / ');
+  if (timeframeEl) timeframeEl.textContent = assetType === 'stock' ? '5m bars' : '1m bars';
 
   const ctx = canvas.getContext('2d');
   const dpr = window.devicePixelRatio || 1;
 
-  // Set canvas size to match CSS size
   const rect = canvas.getBoundingClientRect();
   canvas.width = rect.width * dpr;
   canvas.height = rect.height * dpr;
@@ -1214,7 +1288,6 @@ function renderBTCChart(bars) {
   const chartW = W - PAD_LEFT - PAD_RIGHT;
   const chartH = H - PAD_TOP - PAD_BOTTOM;
 
-  // Get price range
   const closes = bars.map(b => b.c);
   const highs = bars.map(b => b.h);
   const lows = bars.map(b => b.l);
@@ -1229,7 +1302,11 @@ function renderBTCChart(bars) {
   const priceToY = (p) => PAD_TOP + chartH - ((p - pMin) / (pMax - pMin)) * chartH;
   const barW = chartW / bars.length;
 
-  // Clear
+  // Price label formatting — 2 decimals for stocks, 0 for BTC
+  const priceFmt = assetType === 'stock'
+    ? { minimumFractionDigits: 2, maximumFractionDigits: 2 }
+    : { minimumFractionDigits: 0, maximumFractionDigits: 0 };
+
   ctx.clearRect(0, 0, W, H);
 
   // Grid lines
@@ -1243,12 +1320,11 @@ function renderBTCChart(bars) {
     ctx.lineTo(W - PAD_RIGHT, y);
     ctx.stroke();
 
-    // Price labels
     const price = pMax - (i / gridCount) * (pMax - pMin);
     ctx.fillStyle = '#555';
     ctx.font = '9px JetBrains Mono, monospace';
     ctx.textAlign = 'right';
-    ctx.fillText(price.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 }), PAD_LEFT - 8, y + 3);
+    ctx.fillText(price.toLocaleString('en-US', priceFmt), PAD_LEFT - 8, y + 3);
   }
 
   // Candlesticks
@@ -1257,7 +1333,6 @@ function renderBTCChart(bars) {
     const x = PAD_LEFT + i * barW + barW / 2;
     const isUp = b.c >= b.o;
 
-    // Wick
     ctx.strokeStyle = isUp ? '#22c55e' : '#ef4444';
     ctx.lineWidth = 1;
     ctx.beginPath();
@@ -1265,7 +1340,6 @@ function renderBTCChart(bars) {
     ctx.lineTo(x, priceToY(b.l));
     ctx.stroke();
 
-    // Body
     const bodyTop = priceToY(Math.max(b.o, b.c));
     const bodyBot = priceToY(Math.min(b.o, b.c));
     const bodyH = Math.max(bodyBot - bodyTop, 1);
@@ -1287,13 +1361,12 @@ function renderBTCChart(bars) {
   ctx.stroke();
   ctx.setLineDash([]);
 
-  // Current price label (right side)
   ctx.fillStyle = '#fff';
   ctx.font = 'bold 10px JetBrains Mono, monospace';
   ctx.textAlign = 'left';
-  ctx.fillText(lastClose.toLocaleString('en-US', { minimumFractionDigits: 0 }), W - PAD_RIGHT + 4, lastY + 3);
+  ctx.fillText(lastClose.toLocaleString('en-US', priceFmt), W - PAD_RIGHT + 4, lastY + 3);
 
-  // Time labels along bottom
+  // Time labels
   ctx.fillStyle = '#555';
   ctx.font = '8px JetBrains Mono, monospace';
   ctx.textAlign = 'center';
@@ -1322,7 +1395,7 @@ function renderBTCChart(bars) {
   }
 }
 
-function renderTradesTable(trades) {
+function renderTradesTable(trades, assetType) {
   const tbody = document.getElementById('tradesBody');
   if (!tbody) return;
 
@@ -1331,13 +1404,15 @@ function renderTradesTable(trades) {
     return;
   }
 
+  const qtyDecimals = (assetType === 'stock') ? 0 : 5;
+
   let html = '';
   const reversed = [...trades].reverse();
   for (const t of reversed) {
     const time = fmtTradeTime(t.exit_time || t.entry_time);
     const dir = (t.direction || '').toUpperCase();
     const dirClass = dir === 'LONG' ? 'text-green' : dir === 'SHORT' ? 'text-red' : '';
-    const qty = t.qty ? parseFloat(t.qty).toFixed(5) : '—';
+    const qty = t.qty ? parseFloat(t.qty).toFixed(qtyDecimals) : '—';
     const entryPrice = t.entry_price ? fmtUSD(t.entry_price) : '—';
     const exitPrice = t.exit_price ? fmtUSD(t.exit_price) : '—';
     const reason = t.reason || '—';
