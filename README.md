@@ -32,20 +32,23 @@ cd Alfred-Ai
 uv sync                          # Creates venv + installs all dependencies
 uv sync --extra trading          # Include trading bot dependencies (optional)
 
+# Add the alfred command to your PATH
+sudo ln -sf "$(pwd)/alfred" /usr/local/bin/alfred
+
 # Run the setup wizard
-uv run alfred setup
+alfred setup
 
 # Connect to Discord
-uv run alfred discord setup
+alfred discord setup
 
 # Start Alfred
-uv run alfred start
+alfred start
 ```
 
 > **Don't have uv?** Install it with `curl -LsSf https://astral.sh/uv/install.sh | sh`
 > or see [docs.astral.sh/uv](https://docs.astral.sh/uv/getting-started/installation/).
 >
-> **Want a global `alfred` command?** Run `sudo ln -sf "$(pwd)/alfred" /usr/local/bin/alfred`
+> **Prefer not to symlink?** Use `uv run alfred` instead of `alfred` for all commands.
 
 The setup wizard walks you through:
 1. Configuring your LLM provider and API key
