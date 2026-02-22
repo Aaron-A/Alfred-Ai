@@ -468,6 +468,8 @@ class Scheduler:
                 if current_minute != self._last_check_minute:
                     self._last_check_minute = current_minute
                     self._check_schedules(now)
+                    # System maintenance (memory compaction, etc.)
+                    self._check_maintenance(now)
             except Exception as e:
                 # Never let the scheduler loop die
                 logger.error(f"Scheduler loop error: {e}")
@@ -523,14 +525,9 @@ class Scheduler:
                 # (scan in 1-minute increments, stop at first match)
                 check_time = last.replace(second=0, microsecond=0)
                 missed = False
+                from datetime import timedelta as _td
                 for _ in range(int(min(minutes_since, MAX_MISSED_RUN_MINUTES))):
-                    check_time = check_time.replace(
-                        minute=(check_time.minute + 1) % 60,
-                        hour=check_time.hour + (1 if check_time.minute == 59 else 0),
-                    )
-                    # Handle hour overflow
-                    if check_time.hour >= 24:
-                        break
+                    check_time = check_time + _td(minutes=1)
                     if cron_matches(schedule.cron, check_time):
                         missed = True
                         break
@@ -591,6 +588,56 @@ class Scheduler:
                             continue
 
                     self._execute_schedule(agent_name, schedule)
+
+    _last_maintenance_day: str = ""
+
+    def _check_maintenance(self, now: datetime):
+        """
+        Run system maintenance tasks (memory compaction, etc.).
+
+        Checks alfred.json for maintenance config:
+        {
+            "maintenance": {
+                "memory_compact_cron": "0 3 * * 0",  // Sunday 3 AM
+                "compact_max_age_days": 90,
+                "compact_min_importance": 0.3
+            }
+        }
+
+        Falls back to weekly Sunday 3 AM if not configured.
+        """
+        cfg = _load_config()
+        maintenance = cfg.get("maintenance", {})
+        compact_cron = maintenance.get("memory_compact_cron", "0 3 * * 0")  # Default: Sunday 3 AM
+
+        if not cron_matches(compact_cron, now):
+            return
+
+        # Only run once per day (avoid re-running if loop checks the same minute twice)
+        today_key = now.strftime("%Y-%m-%d")
+        if self._last_maintenance_day == today_key:
+            return
+        self._last_maintenance_day = today_key
+
+        # Run compaction in a background thread
+        max_age = maintenance.get("compact_max_age_days", 90)
+        min_importance = maintenance.get("compact_min_importance", 0.3)
+
+        def _run_compact():
+            try:
+                from .memory import MemoryStore
+                store = MemoryStore()
+                results = store.compact(max_age_days=max_age, min_importance=min_importance)
+                total = sum(results.values())
+                if total > 0:
+                    logger.info(f"Maintenance: compacted {total} old low-importance memories")
+                else:
+                    logger.debug("Maintenance: no memories needed compaction")
+            except Exception as e:
+                logger.warning(f"Maintenance compaction failed: {e}")
+
+        t = threading.Thread(target=_run_compact, daemon=True, name="maintenance-compact")
+        t.start()
 
     def _execute_schedule(self, agent_name: str, schedule: Schedule, is_catchup: bool = False):
         """Execute a scheduled task in a separate thread with retry support."""

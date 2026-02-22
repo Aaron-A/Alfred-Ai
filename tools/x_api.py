@@ -381,6 +381,14 @@ def x_search_tweets(query: str, max_results: int = 10) -> str:
     )
 
 
+def x_delete_tweet(tweet_id: str) -> str:
+    """Delete a tweet on X/Twitter by its ID."""
+    return x_api_request(
+        endpoint=f"/2/tweets/{tweet_id}",
+        method="DELETE",
+    )
+
+
 def x_get_metrics() -> str:
     """Get your X/Twitter account metrics for monetization tracking."""
     return x_api_request(
@@ -459,6 +467,18 @@ def register(registry: ToolRegistry):
         fn=x_follow_user,
         parameters=[
             ToolParameter("username", "string", "The username to follow (without @)"),
+        ],
+        category="social",
+        source="shared",
+        file_path=__file__,
+    )
+
+    registry.register_function(
+        name="x_delete_tweet",
+        description="Delete a tweet on X/Twitter by its ID.",
+        fn=x_delete_tweet,
+        parameters=[
+            ToolParameter("tweet_id", "string", "The tweet ID to delete"),
         ],
         category="social",
         source="shared",

@@ -265,7 +265,8 @@ def register_builtin_tools(registry: ToolRegistry, agent_id: str = None,
 
     # ─── Memory Tools (agent-scoped by default) ──────────────
 
-    def memory_search(query: str, memory_type: str = None, top_k: int = 5) -> str:
+    def memory_search(query: str, memory_type: str = None, top_k: int = 5,
+                       filters: str = None) -> str:
         """Search your own memory for relevant context."""
         from .memory import MemoryStore
         store = MemoryStore(agent_id=agent_id or "default")
@@ -273,29 +274,45 @@ def register_builtin_tools(registry: ToolRegistry, agent_id: str = None,
         # Build agent_id filter so we only see our own memories
         where = f"agent_id = '{agent_id}'" if agent_id else None
 
+        # Parse structured filters if provided (JSON string)
+        parsed_filters = None
+        if filters:
+            try:
+                parsed_filters = json.loads(filters)
+            except (json.JSONDecodeError, TypeError):
+                pass  # Ignore malformed filters
+
         results = store.search(
             query=query, memory_type=memory_type or None,
-            top_k=top_k, where=where,
+            top_k=top_k, where=where, filters=parsed_filters,
         )
         if not results:
             return "No relevant memories found."
         lines = []
         for r in results:
+            rid = r.get("id", "?")
             mtype = r.get("memory_type", "?")
             content = r.get("content", "")
             dist = r.get("_distance", 0)
             relevance = max(0, 1 - dist)
-            lines.append(f"[{mtype}] (relevance: {relevance:.0%}) {content[:200]}")
+            importance = r.get("importance", 0.5) or 0.5
+            imp_tag = f" ★{importance:.1f}" if importance > 0.6 else ""
+            lines.append(f"[{mtype}] id:{rid} (relevance: {relevance:.0%}{imp_tag}) {content[:200]}")
         return "\n".join(lines)
 
     registry.register_function(
         name="memory_search",
-        description="Search your memory for relevant past events, trades, decisions, or context. Use this before answering questions about prior work, past trades, lessons learned, or historical context.",
+        description=(
+            "Search your memory for relevant past events, trades, decisions, or context. "
+            "Use this before answering questions about prior work, past trades, lessons learned, "
+            "or historical context. Results include record IDs for use with memory_update and memory_link."
+        ),
         fn=memory_search,
         parameters=[
             ToolParameter("query", "string", "Natural language search query"),
             ToolParameter("memory_type", "string", "Filter to type: trade, macro, tweet, decision (optional)", required=False),
             ToolParameter("top_k", "integer", "Number of results (default 5)", required=False),
+            ToolParameter("filters", "string", 'JSON object for structured filtering, e.g. \'{"symbol":"BTC/USD","outcome":"win"}\' (optional)', required=False),
         ],
         category="memory",
     )
@@ -323,6 +340,87 @@ def register_builtin_tools(registry: ToolRegistry, agent_id: str = None,
             ToolParameter("content", "string", "What to remember"),
             ToolParameter("memory_type", "string", "Type: generic, trade, macro, tweet, decision", required=False),
             ToolParameter("tags", "string", "Comma-separated tags for filtering", required=False),
+        ],
+        category="memory",
+    )
+
+    # Memory update tool — update importance, tags, or content of existing memories
+    def memory_update(record_id: str, memory_type: str, importance: float = None,
+                      tags: str = None, content: str = None) -> str:
+        """Update an existing memory's importance, tags, or content."""
+        from .memory import MemoryStore
+        store = MemoryStore(agent_id=agent_id or "default")
+        updates = {}
+        if importance is not None:
+            updates["importance"] = max(0.0, min(1.0, importance))
+        if tags is not None:
+            updates["tags"] = tags
+        if content is not None:
+            updates["content"] = content
+        if not updates:
+            return "Error: No updates provided. Specify importance, tags, or content."
+        success = store.update(record_id, memory_type, updates)
+        if success:
+            return f"Memory {record_id} updated: {', '.join(f'{k}={v}' for k, v in updates.items())}"
+        return f"Memory {record_id} not found in {memory_type}."
+
+    registry.register_function(
+        name="memory_update",
+        description=(
+            "Update an existing memory record. Use this to adjust importance after seeing outcomes "
+            "(e.g., a lesson proved valuable → increase importance), update tags, or correct content. "
+            "Get the record_id from memory_search results."
+        ),
+        fn=memory_update,
+        parameters=[
+            ToolParameter("record_id", "string", "The memory record ID to update"),
+            ToolParameter("memory_type", "string", "The memory type (trade, decision, macro, etc.)"),
+            ToolParameter("importance", "number", "New importance score 0.0-1.0 (higher = more important)", required=False),
+            ToolParameter("tags", "string", "New comma-separated tags", required=False),
+            ToolParameter("content", "string", "Updated content text", required=False),
+        ],
+        category="memory",
+    )
+
+    # Memory link tool — connect related memories (decision → trade outcome)
+    def memory_link(source_id: str, source_type: str, target_id: str, target_type: str) -> str:
+        """Link two memories together (e.g., a decision to its trade outcome)."""
+        from .memory import MemoryStore
+        store = MemoryStore(agent_id=agent_id or "default")
+
+        # Get source record to append linked_id
+        source = store.get(source_id, source_type)
+        if not source:
+            return f"Error: Source memory {source_id} not found in {source_type}."
+
+        # Verify target exists
+        target = store.get(target_id, target_type)
+        if not target:
+            return f"Error: Target memory {target_id} not found in {target_type}."
+
+        # Append to linked_ids (avoid duplicates)
+        existing = source.get("linked_ids", "") or ""
+        existing_ids = set(existing.split(",")) if existing else set()
+        existing_ids.discard("")
+        existing_ids.add(target_id)
+        new_linked = ",".join(sorted(existing_ids))
+
+        store.update(source_id, source_type, {"linked_ids": new_linked})
+        return f"Linked {source_type}/{source_id} → {target_type}/{target_id}"
+
+    registry.register_function(
+        name="memory_link",
+        description=(
+            "Link two memories together to track cause and effect. "
+            "For example, link a decision memory to the trade outcome that resulted from it. "
+            "This helps you learn which decisions led to good or bad outcomes."
+        ),
+        fn=memory_link,
+        parameters=[
+            ToolParameter("source_id", "string", "ID of the source memory (e.g., the decision)"),
+            ToolParameter("source_type", "string", "Type of source memory (e.g., 'decision')"),
+            ToolParameter("target_id", "string", "ID of the target memory (e.g., the trade)"),
+            ToolParameter("target_type", "string", "Type of target memory (e.g., 'trade')"),
         ],
         category="memory",
     )

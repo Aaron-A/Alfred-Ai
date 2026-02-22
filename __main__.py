@@ -2249,6 +2249,58 @@ def cmd_discord_setup():
     console.print(f"  Start it: [bold]alfred discord start[/]\n")
 
 
+def _start_trading_bot():
+    """Start the BTC trading bot if the btc-trader agent is configured."""
+    import subprocess as _sp
+    from pathlib import Path as _P
+    from core.process import read_pid, is_alive, cleanup_stale_pid
+
+    project_root = _P(__file__).parent
+    bot_dir = project_root / "workspaces" / "btc-trader" / "bot"
+    run_script = bot_dir / "run"
+    pid_file = bot_dir / "bot.pid"
+
+    if not run_script.exists():
+        return  # btc-trader agent not set up
+
+    # Check if already running
+    pid = read_pid(pid_file)
+    if pid is not None and is_alive(pid):
+        return  # Already running
+    cleanup_stale_pid(pid_file)
+
+    try:
+        log_file = bot_dir / "trading_bot.log"
+        log_handle = open(log_file, "a")
+        proc = _sp.Popen(
+            ["bash", str(run_script)],
+            cwd=str(bot_dir),
+            stdout=log_handle,
+            stderr=_sp.STDOUT,
+            start_new_session=True,
+        )
+        # Bot writes its own PID file on startup, but write a quick one
+        # so stop_trading_bot can find it even if the bot hasn't booted yet
+        pid_file.write_text(str(proc.pid))
+    except Exception as e:
+        import logging as _log
+        _log.getLogger("alfred.trading").warning(f"Trading bot startup failed: {e}")
+
+
+def _stop_trading_bot():
+    """Stop the BTC trading bot if running."""
+    from pathlib import Path as _P
+    from core.process import read_pid, kill_and_wait
+
+    bot_dir = _P(__file__).parent / "workspaces" / "btc-trader" / "bot"
+    pid_file = bot_dir / "bot.pid"
+
+    pid = read_pid(pid_file)
+    if pid is not None:
+        kill_and_wait(pid, timeout=8.0)  # Extra time to flatten positions
+    pid_file.unlink(missing_ok=True)
+
+
 def cmd_start(foreground: bool = False, _daemon_child: bool = False, port: int = 7700):
     """Start Alfred — launches all services (API + scheduler + Discord)."""
     import json
@@ -2325,6 +2377,11 @@ def cmd_start(foreground: bool = False, _daemon_child: bool = False, port: int =
 
             agent_config = AgentConfig.from_dict(agent_data)
             agent = Agent(agent_config)
+            # Scheduled tasks start with a clean session — they store
+            # important findings in vector memory, so prior session
+            # history just wastes context window and can cause token
+            # overflow on multi-tool runs.
+            agent.history = []
             result = agent.run(task)
 
             # Post the agent's response to its mapped Discord channel
@@ -2339,6 +2396,9 @@ def cmd_start(foreground: bool = False, _daemon_child: bool = False, port: int =
         # ── 1. Scheduler (background thread) ──
         scheduler = Scheduler(agent_runner=_run_agent_task)
         scheduler.start()
+
+        # ── 1b. Trading bot (background process) ──
+        _start_trading_bot()
 
         # ── 2. API server (daemon thread) ──
         api_started = False
@@ -2398,6 +2458,7 @@ def cmd_start(foreground: bool = False, _daemon_child: bool = False, port: int =
             try:
                 bot.run(foreground=not _daemon_child)
             finally:
+                _stop_trading_bot()
                 scheduler.stop()
         else:
             # No Discord — API + Scheduler only. Block on signal.
@@ -2440,6 +2501,7 @@ def cmd_start(foreground: bool = False, _daemon_child: bool = False, port: int =
                         _pid_file.unlink(missing_ok=True)
                 except (ValueError, OSError):
                     _pid_file.unlink(missing_ok=True)
+                _stop_trading_bot()
                 scheduler.stop()
     else:
         # Daemon mode — spawn a clean subprocess (lancedb is not fork-safe)

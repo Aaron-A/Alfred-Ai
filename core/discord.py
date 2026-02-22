@@ -171,11 +171,23 @@ def _find_daemon_pids() -> list[int]:
 def stop_bot() -> bool:
     """Stop all running Alfred daemon processes.
 
-    1. Kill the PID recorded in the PID file (primary).
-    2. Scan for any other daemon-child processes that may have been orphaned
+    1. Stop the trading bot (if running).
+    2. Kill the PID recorded in the PID file (primary).
+    3. Scan for any other daemon-child processes that may have been orphaned
        (e.g. during a reload race) and kill those too.
-    3. Clean up PID and heartbeat files.
+    4. Clean up PID and heartbeat files.
     """
+    # Stop trading bot first (gives it time to flatten positions)
+    try:
+        from core.process import read_pid, kill_and_wait
+        bot_pid_file = Path(__file__).parent.parent / "workspaces" / "btc-trader" / "bot" / "bot.pid"
+        bot_pid = read_pid(bot_pid_file)
+        if bot_pid is not None:
+            kill_and_wait(bot_pid, timeout=8.0)
+            bot_pid_file.unlink(missing_ok=True)
+    except Exception:
+        pass
+
     pid = is_bot_running()
     killed_any = False
 

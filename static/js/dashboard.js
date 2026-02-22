@@ -82,8 +82,8 @@ async function deleteJSON(path) {
 
 async function refreshData() {
   // Read selected period from the Metrics tab dropdown
-  const period = document.getElementById('metricsPeriod')?.value || 'session';
-  const metricsUrl = '/v1/metrics' + (period !== 'session' ? '?period=' + period : '');
+  const period = document.getElementById('metricsPeriod')?.value || 'day';
+  const metricsUrl = '/v1/metrics?period=' + period;
 
   const [status, agentsData, metricsData, providersData] = await Promise.all([
     fetchJSON('/v1/status'),
@@ -125,6 +125,10 @@ async function refreshData() {
 
   renderAll();
   updateRefreshInfo();
+
+  // Fetch trading data and vector queries (on every refresh, lightweight)
+  fetchTradingData();
+  fetchVectorQueries();
 }
 
 // ─── Formatters ───────────────────────────────────
@@ -147,6 +151,12 @@ function fmtMs(ms) {
   if (!ms) return '-';
   if (ms >= 1000) return (ms / 1000).toFixed(1) + 's';
   return ms + 'ms';
+}
+
+function fmtCost(n) {
+  if (n == null || isNaN(n) || n === 0) return '$0.00';
+  if (n < 0.01) return '<$0.01';
+  return '$' + n.toFixed(2);
 }
 
 function fmtTime(iso) {
@@ -181,7 +191,7 @@ function statusBadge(status) {
 
 function aggregateMetrics() {
   const agents = state.metrics?.agents || {};
-  let totalMessages = 0, totalTokens = 0, totalMs = 0, totalErrors = 0;
+  let totalMessages = 0, totalTokens = 0, totalMs = 0, totalErrors = 0, totalCost = 0;
   let agentCount = 0;
 
   for (const [name, m] of Object.entries(agents)) {
@@ -189,12 +199,13 @@ function aggregateMetrics() {
     totalTokens += (m.input_tokens || 0) + (m.output_tokens || 0);
     totalMs += m.total_elapsed_ms || 0;
     totalErrors += m.errors || 0;
+    totalCost += m.estimated_cost || 0;
     if (m.messages > 0) agentCount++;
   }
 
   const avgMs = totalMessages > 0 ? Math.round(totalMs / totalMessages) : 0;
 
-  return { totalMessages, totalTokens, totalMs, totalErrors, avgMs, agentCount };
+  return { totalMessages, totalTokens, totalMs, totalErrors, avgMs, agentCount, totalCost };
 }
 
 // ─── Render: Stats Grid ───────────────────────────
@@ -225,6 +236,13 @@ function renderStats() {
     totalOut += m.output_tokens || 0;
   }
   document.getElementById('statTokensSub').textContent = `${fmtTokens(totalIn)} in / ${fmtTokens(totalOut)} out`;
+
+  // Est. Cost
+  document.getElementById('statCost').textContent = fmtCost(agg.totalCost);
+  const costPerMsg = agg.totalMessages > 0 ? (agg.totalCost / agg.totalMessages) : 0;
+  document.getElementById('statCostSub').textContent = agg.totalCost > 0
+    ? `~${fmtCost(costPerMsg)}/msg`
+    : 'no cost data';
 
   // Avg Response
   document.getElementById('statAvgMs').textContent = fmtMs(agg.avgMs);
@@ -275,7 +293,7 @@ function renderAgentsTable() {
   const metricsAgents = state.metrics?.agents || {};
 
   if (!agents.length) {
-    tbody.innerHTML = '<tr><td colspan="7" class="empty-state">No agents configured. Run: alfred setup</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8" class="empty-state">No agents configured. Run: alfred setup</td></tr>';
     return;
   }
 
@@ -296,6 +314,7 @@ function renderAgentsTable() {
       ? `<button class="delete-btn" onclick="openDeleteAgentModal('${escHtml(agent.name)}')" title="Delete agent">&#10005;</button>`
       : '';
 
+    const cost = m.estimated_cost || 0;
     html += `<tr>
       <td class="fw-600" style="color:#fff;">${escHtml(agent.name)}</td>
       <td>${statusBadge(agent.status || 'active')}</td>
@@ -303,6 +322,7 @@ function renderAgentsTable() {
       <td>${sessions.length || 0}</td>
       <td>${fmtNum(m.messages || 0)}</td>
       <td>${fmtTokens(totalTokens)}</td>
+      <td class="cost-value">${fmtCost(cost)}</td>
       <td>${m.errors ? '<span class="text-red">' + m.errors + '</span>' : '<span class="text-dim">0</span>'}</td>
     </tr>`;
   }
@@ -926,6 +946,7 @@ function renderMetricsCards() {
       <div class="metric-row"><span class="metric-label">Input Tokens</span><span class="metric-value">${fmtTokens(m.input_tokens || 0)}</span></div>
       <div class="metric-row"><span class="metric-label">Output Tokens</span><span class="metric-value">${fmtTokens(m.output_tokens || 0)}</span></div>
       <div class="metric-row"><span class="metric-label">Total Tokens</span><span class="metric-value fw-600">${fmtTokens(totalTokens)}</span></div>
+      <div class="metric-row"><span class="metric-label">Estimated Cost</span><span class="metric-value cost-value">${fmtCost(m.estimated_cost || 0)}</span></div>
       <div class="metric-row"><span class="metric-label">Last Activity</span><span class="metric-value">${m.last_activity ? fmtRelative(m.last_activity) : '<span class="text-dim">-</span>'}</span></div>`;
 
     // Recent errors
@@ -952,7 +973,7 @@ function renderModelsTable() {
   const models = state.metrics?.models || {};
 
   if (!Object.keys(models).length) {
-    tbody.innerHTML = '<tr><td colspan="8" class="empty-state">No model metrics yet. Send some messages first.</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="9" class="empty-state">No model metrics yet. Send some messages first.</td></tr>';
     return;
   }
 
@@ -966,6 +987,7 @@ function renderModelsTable() {
     const totalTokens = (m.input_tokens || 0) + (m.output_tokens || 0);
     const avgMs = m.messages > 0 ? Math.round((m.total_elapsed_ms || 0) / m.messages) : 0;
 
+    const cost = m.estimated_cost || 0;
     html += `<tr>
       <td style="color:var(--cyan);">${escHtml(provider)}</td>
       <td class="fw-600" style="color:#fff;">${escHtml(modelShort)}</td>
@@ -973,8 +995,419 @@ function renderModelsTable() {
       <td>${fmtTokens(m.input_tokens || 0)}</td>
       <td>${fmtTokens(m.output_tokens || 0)}</td>
       <td class="fw-600">${fmtTokens(totalTokens)}</td>
+      <td class="cost-value">${fmtCost(cost)}</td>
       <td>${fmtMs(avgMs)}</td>
       <td>${m.errors ? '<span class="text-red">' + m.errors + '</span>' : '<span class="text-dim">0</span>'}</td>
+    </tr>`;
+  }
+
+  tbody.innerHTML = html;
+}
+
+// ─── Header Restart ──────────────────────────────
+
+async function headerRestart() {
+  const btn = document.getElementById('headerRestartBtn');
+  if (!btn || btn.disabled) return;
+
+  btn.disabled = true;
+  btn.textContent = 'RESTARTING...';
+  btn.className = 'header-restart-btn header-restart-btn--restarting';
+
+  const result = await postJSON('/v1/admin/reload');
+
+  if (result?.status === 'restarting' || result?.status === 'restarted') {
+    let attempts = 0;
+    const poll = setInterval(async () => {
+      attempts++;
+      try {
+        const res = await fetch(API + '/health');
+        if (res.ok) {
+          clearInterval(poll);
+          btn.textContent = 'RESTARTED';
+          btn.className = 'header-restart-btn header-restart-btn--done';
+          setTimeout(() => {
+            btn.textContent = 'RESTART';
+            btn.className = 'header-restart-btn';
+            btn.disabled = false;
+            refreshData();
+          }, 2000);
+        }
+      } catch (e) {
+        // API not up yet
+      }
+      if (attempts >= 20) {
+        clearInterval(poll);
+        btn.textContent = 'TIMEOUT';
+        btn.className = 'header-restart-btn header-restart-btn--error';
+        setTimeout(() => {
+          btn.textContent = 'RESTART';
+          btn.className = 'header-restart-btn';
+          btn.disabled = false;
+        }, 3000);
+      }
+    }, 1500);
+  } else {
+    btn.textContent = 'FAILED';
+    btn.className = 'header-restart-btn header-restart-btn--error';
+    setTimeout(() => {
+      btn.textContent = 'RESTART';
+      btn.className = 'header-restart-btn';
+      btn.disabled = false;
+    }, 3000);
+  }
+}
+
+// ─── Trading Tab ─────────────────────────────────
+
+let tradingData = null;
+let barsBuffer = [];                 // accumulated bars across refreshes
+const MAX_BARS_HOURS = 7;            // keep last 7h of data
+const MAX_BARS = MAX_BARS_HOURS * 60; // 420 bars at 1-min
+
+async function fetchTradingData() {
+  // Incremental: only fetch bars since the last one we have
+  let url = '/v1/trading/status';
+  if (barsBuffer.length > 0) {
+    const lastT = barsBuffer[barsBuffer.length - 1].t;
+    url += '?since=' + encodeURIComponent(lastT);
+  }
+
+  tradingData = await fetchJSON(url);
+  if (!tradingData) return;
+
+  // Merge new bars into buffer
+  const newBars = tradingData.bars || [];
+  if (barsBuffer.length === 0) {
+    // Initial load — use full response
+    barsBuffer = newBars;
+  } else if (newBars.length > 0) {
+    // Incremental — append only bars with timestamps we don't have
+    const lastKnown = barsBuffer[barsBuffer.length - 1].t;
+    for (const bar of newBars) {
+      if (bar.t > lastKnown) barsBuffer.push(bar);
+    }
+  }
+
+  // Trim to keep only last 7h
+  if (barsBuffer.length > MAX_BARS) {
+    barsBuffer = barsBuffer.slice(-MAX_BARS);
+  }
+
+  renderTradingTab();
+}
+
+function renderTradingTab() {
+  if (!tradingData) return;
+  renderTradingStatusCards(tradingData);
+  renderBTCChart(barsBuffer);
+  renderTradesTable(tradingData.trades || []);
+}
+
+function fmtUSD(val) {
+  const n = parseFloat(val);
+  if (isNaN(n)) return '—';
+  return '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+function fmtTradeTime(isoStr) {
+  if (!isoStr) return '—';
+  try {
+    const d = new Date(isoStr);
+    if (isNaN(d.getTime())) return isoStr;
+    return d.toLocaleString('en-US', {
+      month: 'short', day: 'numeric',
+      hour: 'numeric', minute: '2-digit',
+      hour12: true
+    });
+  } catch { return isoStr; }
+}
+
+function renderTradingStatusCards(data) {
+  // Equity
+  const equity = data.account?.equity;
+  const eqEl = document.getElementById('tradingEquity');
+  const eqSub = document.getElementById('tradingEquitySub');
+  if (equity) {
+    eqEl.textContent = fmtUSD(equity);
+    eqEl.style.color = 'var(--green)';
+    const bp = data.account?.buying_power;
+    eqSub.textContent = bp ? `Buying power: ${fmtUSD(bp)}` : '';
+  } else {
+    eqEl.textContent = '—';
+    eqEl.style.color = '';
+    eqSub.textContent = 'No account data';
+  }
+
+  // Position
+  const pos = data.position;
+  const posEl = document.getElementById('tradingPosition');
+  const posSub = document.getElementById('tradingPositionSub');
+  if (pos) {
+    const qty = parseFloat(pos.qty || 0);
+    const side = qty > 0 ? 'LONG' : qty < 0 ? 'SHORT' : 'FLAT';
+    posEl.textContent = `${side} ${Math.abs(qty).toFixed(4)}`;
+    const pl = parseFloat(pos.unrealized_pl || 0);
+    posEl.style.color = pl >= 0 ? 'var(--green)' : 'var(--red)';
+    const plStr = (pl >= 0 ? '+' : '') + fmtUSD(pl);
+    const entry = pos.entry_price ? `Entry: ${fmtUSD(pos.entry_price)}` : '';
+    posSub.textContent = `${plStr}${entry ? ' | ' + entry : ''}`;
+  } else {
+    posEl.textContent = 'FLAT';
+    posEl.style.color = 'var(--text-dim)';
+    posSub.textContent = 'No open position';
+  }
+
+  // Bot status
+  const botEl = document.getElementById('tradingBotStatus');
+  const botSub = document.getElementById('tradingBotSub');
+  if (data.bot_running) {
+    botEl.textContent = 'RUNNING';
+    botEl.style.color = 'var(--green)';
+    botSub.textContent = 'Connected to Alpaca';
+  } else {
+    botEl.textContent = 'STOPPED';
+    botEl.style.color = 'var(--red)';
+    botSub.textContent = 'Bot is not running';
+  }
+
+  // Total P&L — equity-based (ground truth from Alpaca)
+  const pnlEl = document.getElementById('tradingPnl');
+  const pnlSub = document.getElementById('tradingPnlSub');
+  const eqVal = parseFloat(equity || 0);
+  const initialEquity = parseFloat(data.initial_equity || 0);
+  const trades = data.trades || [];
+  const tradeCount = trades.filter(t => parseFloat(t.realized_pnl || t.pnl || 0) !== 0).length;
+
+  if (eqVal > 0 && initialEquity > 0) {
+    const totalPnl = eqVal - initialEquity;
+    const returnPct = ((totalPnl / initialEquity) * 100).toFixed(2);
+    pnlEl.textContent = (totalPnl >= 0 ? '+' : '') + fmtUSD(totalPnl);
+    pnlEl.style.color = totalPnl >= 0 ? 'var(--green)' : 'var(--red)';
+    pnlSub.textContent = `${returnPct}% return` + (tradeCount > 0 ? ` | ${tradeCount} trades` : '');
+  } else {
+    pnlEl.textContent = '$0.00';
+    pnlEl.style.color = 'var(--text-dim)';
+    pnlSub.textContent = 'No account data';
+  }
+}
+
+function renderBTCChart(bars) {
+  const canvas = document.getElementById('btcChart');
+  if (!canvas || !bars.length) return;
+
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+
+  // Set canvas size to match CSS size
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * dpr;
+  canvas.height = rect.height * dpr;
+  ctx.scale(dpr, dpr);
+
+  const W = rect.width;
+  const H = rect.height;
+  const PAD_TOP = 20;
+  const PAD_BOTTOM = 24;
+  const PAD_LEFT = 60;
+  const PAD_RIGHT = 16;
+  const chartW = W - PAD_LEFT - PAD_RIGHT;
+  const chartH = H - PAD_TOP - PAD_BOTTOM;
+
+  // Get price range
+  const closes = bars.map(b => b.c);
+  const highs = bars.map(b => b.h);
+  const lows = bars.map(b => b.l);
+  const allPrices = [...highs, ...lows];
+  const minP = Math.min(...allPrices);
+  const maxP = Math.max(...allPrices);
+  const range = maxP - minP || 1;
+  const padRange = range * 0.05;
+  const pMin = minP - padRange;
+  const pMax = maxP + padRange;
+
+  const priceToY = (p) => PAD_TOP + chartH - ((p - pMin) / (pMax - pMin)) * chartH;
+  const barW = chartW / bars.length;
+
+  // Clear
+  ctx.clearRect(0, 0, W, H);
+
+  // Grid lines
+  ctx.strokeStyle = '#1a1a1a';
+  ctx.lineWidth = 0.5;
+  const gridCount = 5;
+  for (let i = 0; i <= gridCount; i++) {
+    const y = PAD_TOP + (i / gridCount) * chartH;
+    ctx.beginPath();
+    ctx.moveTo(PAD_LEFT, y);
+    ctx.lineTo(W - PAD_RIGHT, y);
+    ctx.stroke();
+
+    // Price labels
+    const price = pMax - (i / gridCount) * (pMax - pMin);
+    ctx.fillStyle = '#555';
+    ctx.font = '9px JetBrains Mono, monospace';
+    ctx.textAlign = 'right';
+    ctx.fillText(price.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 }), PAD_LEFT - 8, y + 3);
+  }
+
+  // Candlesticks
+  for (let i = 0; i < bars.length; i++) {
+    const b = bars[i];
+    const x = PAD_LEFT + i * barW + barW / 2;
+    const isUp = b.c >= b.o;
+
+    // Wick
+    ctx.strokeStyle = isUp ? '#22c55e' : '#ef4444';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x, priceToY(b.h));
+    ctx.lineTo(x, priceToY(b.l));
+    ctx.stroke();
+
+    // Body
+    const bodyTop = priceToY(Math.max(b.o, b.c));
+    const bodyBot = priceToY(Math.min(b.o, b.c));
+    const bodyH = Math.max(bodyBot - bodyTop, 1);
+    const candleW = Math.max(barW * 0.6, 2);
+
+    ctx.fillStyle = isUp ? '#22c55e' : '#ef4444';
+    ctx.fillRect(x - candleW / 2, bodyTop, candleW, bodyH);
+  }
+
+  // Current price line
+  const lastClose = closes[closes.length - 1];
+  const lastY = priceToY(lastClose);
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = 0.5;
+  ctx.setLineDash([4, 4]);
+  ctx.beginPath();
+  ctx.moveTo(PAD_LEFT, lastY);
+  ctx.lineTo(W - PAD_RIGHT, lastY);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Current price label (right side)
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 10px JetBrains Mono, monospace';
+  ctx.textAlign = 'left';
+  ctx.fillText(lastClose.toLocaleString('en-US', { minimumFractionDigits: 0 }), W - PAD_RIGHT + 4, lastY + 3);
+
+  // Time labels along bottom
+  ctx.fillStyle = '#555';
+  ctx.font = '8px JetBrains Mono, monospace';
+  ctx.textAlign = 'center';
+  const labelInterval = Math.max(Math.floor(bars.length / 6), 1);
+  for (let i = 0; i < bars.length; i += labelInterval) {
+    const b = bars[i];
+    const x = PAD_LEFT + i * barW + barW / 2;
+    const d = new Date(b.t);
+    const hh = d.getHours().toString().padStart(2, '0');
+    const mm = d.getMinutes().toString().padStart(2, '0');
+    ctx.fillText(`${hh}:${mm}`, x, H - 6);
+  }
+
+  // Update header price
+  const priceEl = document.getElementById('chartPrice');
+  const changeEl = document.getElementById('chartChange');
+  if (priceEl) priceEl.textContent = fmtUSD(lastClose);
+
+  if (changeEl && bars.length > 1) {
+    const firstClose = closes[0];
+    const diff = lastClose - firstClose;
+    const pct = (diff / firstClose * 100).toFixed(2);
+    const sign = diff >= 0 ? '+' : '';
+    changeEl.textContent = `${sign}${pct}%`;
+    changeEl.className = diff >= 0 ? 'chart-change chart-change--up' : 'chart-change chart-change--down';
+  }
+}
+
+function renderTradesTable(trades) {
+  const tbody = document.getElementById('tradesBody');
+  if (!tbody) return;
+
+  if (!trades.length) {
+    tbody.innerHTML = '<tr><td colspan="7" class="text-dim" style="text-align:center;padding:24px;">No trades yet</td></tr>';
+    return;
+  }
+
+  let html = '';
+  const reversed = [...trades].reverse();
+  for (const t of reversed) {
+    const time = fmtTradeTime(t.exit_time || t.entry_time);
+    const dir = (t.direction || '').toUpperCase();
+    const dirClass = dir === 'LONG' ? 'text-green' : dir === 'SHORT' ? 'text-red' : '';
+    const qty = t.qty ? parseFloat(t.qty).toFixed(5) : '—';
+    const entryPrice = t.entry_price ? fmtUSD(t.entry_price) : '—';
+    const exitPrice = t.exit_price ? fmtUSD(t.exit_price) : '—';
+    const reason = t.reason || '—';
+    const isOpen = t.status === 'open';
+
+    let pnlHtml = '<span class="text-dim">—</span>';
+    if (t.pnl) {
+      const pnlNum = parseFloat(t.pnl);
+      if (!isNaN(pnlNum)) {
+        const pnlColor = pnlNum >= 0 ? 'text-green' : 'text-red';
+        pnlHtml = `<span class="${pnlColor}">${pnlNum >= 0 ? '+' : ''}${fmtUSD(pnlNum)}</span>`;
+      }
+    }
+
+    const rowStyle = isOpen ? ' style="opacity:0.7;font-style:italic;"' : '';
+    const openTag = isOpen ? ' <span class="text-dim">(open)</span>' : '';
+
+    html += `<tr${rowStyle}>
+      <td>${escHtml(time)}</td>
+      <td class="${dirClass} fw-600">${escHtml(dir)}${openTag}</td>
+      <td>${escHtml(qty)}</td>
+      <td>${entryPrice}</td>
+      <td>${exitPrice}</td>
+      <td>${pnlHtml}</td>
+      <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;">${escHtml(reason)}</td>
+    </tr>`;
+  }
+
+  tbody.innerHTML = html;
+}
+
+// ─── Vector Queries ───────────────────────────────
+
+async function fetchVectorQueries() {
+  const period = document.getElementById('metricsPeriod')?.value || 'day';
+  const data = await fetchJSON(`/v1/vector-queries?period=${period}&limit=30`);
+  if (data) {
+    state.vectorQueries = data.queries || [];
+    renderVectorQueries();
+  }
+}
+
+function renderVectorQueries() {
+  const tbody = document.getElementById('vectorQueriesBody');
+  if (!tbody) return;
+
+  const queries = state.vectorQueries || [];
+  if (!queries.length) {
+    tbody.innerHTML = '<tr><td colspan="7" class="text-dim" style="text-align:center;padding:24px;">No vector queries yet</td></tr>';
+    return;
+  }
+
+  let html = '';
+  for (const q of queries) {
+    const queryText = (q.query_text || '').length > 50
+      ? q.query_text.slice(0, 47) + '...'
+      : (q.query_text || '-');
+    const avgDist = q.avg_distance != null ? q.avg_distance.toFixed(3) : '-';
+    const distColor = q.avg_distance != null
+      ? (q.avg_distance < 0.4 ? 'text-green' : q.avg_distance < 0.7 ? 'text-yellow' : 'text-red')
+      : 'text-dim';
+
+    html += `<tr>
+      <td>${fmtRelative(q.timestamp)}</td>
+      <td style="color:var(--cyan);">${escHtml(q.agent || '-')}</td>
+      <td class="vq-query" title="${escHtml(q.query_text || '')}">${escHtml(queryText)}</td>
+      <td>${escHtml(q.memory_type || 'all')}</td>
+      <td>${q.result_count || 0}</td>
+      <td class="${distColor}">${avgDist}</td>
+      <td>${q.elapsed_ms ? q.elapsed_ms + 'ms' : '-'}</td>
     </tr>`;
   }
 
@@ -989,6 +1422,7 @@ function renderAll() {
   renderSchedulesTable();
   renderModelsTable();
   renderMetricsCards();
+  // Trading tab renders from its own data fetch
 }
 
 // ─── Tabs ─────────────────────────────────────────
@@ -1021,7 +1455,10 @@ function updateRefreshInfo() {
 document.addEventListener('DOMContentLoaded', () => {
   initTabs();
   refreshData();
-  setInterval(refreshData, REFRESH_INTERVAL);
+  const refreshId = setInterval(refreshData, REFRESH_INTERVAL);
+
+  // Clean up interval when navigating away
+  window.addEventListener('beforeunload', () => clearInterval(refreshId));
 
   // Period selector triggers immediate refresh
   const periodSelect = document.getElementById('metricsPeriod');
@@ -1050,4 +1487,13 @@ document.addEventListener('DOMContentLoaded', () => {
       if (e.target === deleteModal) closeDeleteAgentModal();
     });
   }
+
+  // Redraw chart on resize (throttled to avoid excessive redraws)
+  let resizeTimer;
+  window.addEventListener('resize', () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      if (barsBuffer.length) renderBTCChart(barsBuffer);
+    }, 200);
+  });
 });

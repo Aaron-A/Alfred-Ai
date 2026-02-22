@@ -138,8 +138,8 @@ body {
 
 .stats-grid {
   display: grid;
-  grid-template-columns: repeat(5, 1fr);
-  gap: 12px;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 10px;
   margin-bottom: 24px;
 }
 
@@ -154,9 +154,10 @@ body {
 .stat-card {
   background: var(--surface);
   border: 1px solid var(--border);
-  padding: 16px;
+  padding: 14px 12px;
   border-radius: var(--radius);
   transition: var(--transition);
+  overflow: hidden;
 }
 
 .stat-card:hover {
@@ -173,9 +174,10 @@ body {
 }
 
 .stat-value {
-  font-size: 24px;
+  font-size: 22px;
   font-weight: 700;
   color: #fff;
+  white-space: nowrap;
 }
 
 .stat-value--blue { color: var(--blue); }
@@ -189,6 +191,9 @@ body {
   font-size: 10px;
   color: var(--text-dim);
   margin-top: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* ═══════════════════════════════════════
@@ -249,6 +254,16 @@ body {
   overflow-x: auto;
   border: 1px solid var(--border);
   border-radius: var(--radius);
+}
+.table-wrap--scroll {
+  max-height: 420px;
+  overflow-y: auto;
+}
+.table-wrap--scroll thead th {
+  position: sticky;
+  top: 0;
+  background: var(--bg);
+  z-index: 2;
 }
 
 .data-table {
@@ -452,18 +467,6 @@ body {
 }
 
 /* ═══════════════════════════════════════
-   SECTION HEADERS
-   ═══════════════════════════════════════ */
-
-.section-header {
-  font-size: 10px;
-  letter-spacing: 1.5px;
-  color: var(--text-dim);
-  font-weight: 600;
-  margin-bottom: 12px;
-}
-
-/* ═══════════════════════════════════════
    EMPTY STATE
    ═══════════════════════════════════════ */
 
@@ -582,9 +585,9 @@ body {
 
 .btn-spinner {
   display: inline-block;
-  width: 10px;
-  height: 10px;
-  border: 1.5px solid currentColor;
+  width: 14px;
+  height: 14px;
+  border: 2px solid currentColor;
   border-top-color: transparent;
   border-radius: 50%;
   animation: run-spin 0.6s linear infinite;
@@ -981,6 +984,151 @@ body {
    UTILITY
    ═══════════════════════════════════════ */
 
+/* ═══════════════════════════════════════
+   HEADER RESTART BUTTON
+   ═══════════════════════════════════════ */
+
+.header-restart-btn {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 1px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: #888;
+  cursor: pointer;
+  transition: color 0.15s ease;
+  white-space: nowrap;
+}
+
+.header-restart-btn:hover:not(:disabled) {
+  color: var(--orange);
+}
+
+.header-restart-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.header-restart-btn--restarting {
+  color: var(--orange);
+}
+
+.header-restart-btn--done {
+  color: var(--green);
+}
+
+.header-restart-btn--error {
+  color: var(--red);
+}
+
+/* ═══════════════════════════════════════
+   TRADING TAB
+   ═══════════════════════════════════════ */
+
+.trading-status-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+@media (max-width: 900px) {
+  .trading-status-grid { grid-template-columns: repeat(2, 1fr); }
+}
+
+@media (max-width: 500px) {
+  .trading-status-grid { grid-template-columns: 1fr; }
+}
+
+.trading-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  padding: 16px;
+  border-radius: var(--radius);
+  transition: var(--transition);
+}
+
+.trading-card:hover {
+  background: var(--surface-hover);
+  border-color: var(--border-light);
+}
+
+.trading-card-label {
+  font-size: 9px;
+  letter-spacing: 1.5px;
+  color: var(--text-dim);
+  font-weight: 600;
+  margin-bottom: 6px;
+}
+
+.trading-card-value {
+  font-size: 24px;
+  font-weight: 700;
+  color: #fff;
+}
+
+.trading-card-sub {
+  font-size: 10px;
+  color: var(--text-dim);
+  margin-top: 4px;
+}
+
+/* Chart Container */
+
+.chart-container {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+  margin-bottom: 4px;
+}
+
+.chart-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.chart-price-group {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+
+.chart-price {
+  font-size: 22px;
+  font-weight: 700;
+  color: #fff;
+}
+
+.chart-change {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.chart-change--up { color: var(--green); }
+.chart-change--down { color: var(--red); }
+
+.chart-timeframe {
+  font-size: 10px;
+  color: var(--text-dim);
+  letter-spacing: 0.5px;
+  margin-left: auto;
+}
+
+#btcChart {
+  width: 100%;
+  height: 280px;
+  display: block;
+}
+
+/* ═══════════════════════════════════════
+   UTILITY
+   ═══════════════════════════════════════ */
+
 .text-green { color: var(--green); }
 .text-red { color: var(--red); }
 .text-yellow { color: var(--yellow); }
@@ -990,3 +1138,19 @@ body {
 .text-dim { color: var(--text-dim); }
 .fw-600 { font-weight: 600; }
 .mono { font-family: inherit; }
+
+/* ═══════════════════════════════════════
+   VECTOR QUERY TABLE
+   ═══════════════════════════════════════ */
+
+.vq-query {
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cost-value {
+  color: var(--green);
+  font-weight: 600;
+}

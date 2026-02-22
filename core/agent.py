@@ -67,6 +67,16 @@ class AgentConfig:
     # Pre-compaction flush — save expiring context to memory before trimming
     pre_compaction_flush: bool = True  # LLM summarizes expiring messages before they're dropped
 
+    # Tool result summarization — compress large tool outputs to save context
+    summarize_tool_results: bool = True  # Summarize tool results exceeding max chars
+    tool_result_max_chars: int = 2000  # Threshold above which results get summarized
+
+    # Smart auto-recall — filter low-relevance memories before injecting
+    auto_recall_threshold: float = 0.4  # Only inject memories with distance < this (0=exact, 1=unrelated)
+
+    # Reflection — post-session self-evaluation stored to memory
+    reflection_enabled: bool = False  # Opt-in: run reflection after each session
+
     @classmethod
     def from_dict(cls, data: dict) -> "AgentConfig":
         return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
@@ -557,6 +567,135 @@ class Agent:
         # Flatten remaining turns back into a flat message list
         return [m for turn in turns for m in turn]
 
+    # ─── Tool Result Summarization ──────────────────────────────
+
+    _TOOL_SUMMARIZE_PROMPT = (
+        "You are a concise data summarizer. You will receive the raw output from a tool call. "
+        "Extract and return ONLY the key information in a compact format:\n"
+        "- Numbers, prices, percentages, dates\n"
+        "- Status indicators (running/stopped, success/failure)\n"
+        "- Key findings or results\n"
+        "- Error messages (preserve exactly)\n\n"
+        "Be extremely concise. Use bullet points. No commentary or interpretation.\n"
+        "If the output is already short or is an error message, return it unchanged."
+    )
+
+    # Tools whose output should never be summarized (already concise or structured)
+    _SKIP_SUMMARIZE_TOOLS = {"memory_search", "memory_store", "memory_search_global",
+                              "memory_update", "memory_link",
+                              "check_inbox", "send_message", "delegate_to",
+                              "switch_model", "tool_list", "tool_search"}
+
+    def _maybe_summarize_tool_result(self, tool_name: str, result: str) -> str:
+        """
+        Summarize a tool result if it exceeds the configured threshold.
+
+        Returns the original result if:
+        - Summarization is disabled
+        - Result is below threshold
+        - Tool is in the skip list
+        - Summarization fails (best-effort)
+        """
+        if not self.config.summarize_tool_results:
+            return result
+        if not result or len(result) <= self.config.tool_result_max_chars:
+            return result
+        if tool_name in self._SKIP_SUMMARIZE_TOOLS:
+            return result
+
+        try:
+            # Truncate input to avoid expensive summarization calls
+            input_text = result[:6000] if len(result) > 6000 else result
+            prompt = f"Summarize this tool output from '{tool_name}':\n\n{input_text}"
+
+            if self.llm.provider == "anthropic":
+                response = self.llm.anthropic_client.messages.create(
+                    model=self.llm.model,
+                    max_tokens=512,
+                    temperature=0.2,
+                    system=self._TOOL_SUMMARIZE_PROMPT,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                text_parts = [b.text for b in response.content if hasattr(b, "text")]
+                summary = "\n".join(text_parts).strip()
+            else:
+                import urllib.request as _urllib_req
+                url = f"{self.llm.base_url}/v1/chat/completions"
+                payload = {
+                    "model": self.llm.model,
+                    "max_tokens": 512,
+                    "temperature": 0.2,
+                    "messages": [
+                        {"role": "system", "content": self._TOOL_SUMMARIZE_PROMPT},
+                        {"role": "user", "content": prompt},
+                    ],
+                }
+                headers = {"Content-Type": "application/json", "User-Agent": "Alfred-AI/1.0"}
+                if self.llm.api_key and self.llm.provider != "ollama":
+                    headers["Authorization"] = f"Bearer {self.llm.api_key}"
+                data = json.dumps(payload).encode("utf-8")
+                req = _urllib_req.Request(url, data=data, headers=headers, method="POST")
+                with _urllib_req.urlopen(req, timeout=30) as resp:
+                    r = json.loads(resp.read().decode("utf-8"))
+                summary = r["choices"][0]["message"].get("content", "").strip()
+
+            if summary and len(summary) < len(result):
+                original_len = len(result)
+                logger.debug(f"{self.config.name}: summarized {tool_name} result {original_len} -> {len(summary)} chars")
+                return f"[Summarized from {original_len} chars]\n{summary}"
+            return result
+
+        except Exception as e:
+            logger.debug(f"{self.config.name}: tool summarization failed (non-fatal): {e}")
+            return result
+
+    # ─── Tool Execution with Retry ───────────────────────────────
+
+    # Transient error patterns worth retrying
+    _TRANSIENT_PATTERNS = ("timeout", "429", "503", "502", "rate limit",
+                           "connection reset", "temporary", "EAGAIN")
+
+    def _execute_tool_with_retry(self, tool_name: str, tool_input: dict, max_retries: int = 2) -> str:
+        """
+        Execute a tool with automatic retry for transient errors.
+
+        Retries up to max_retries times for transient errors (timeouts, rate limits, 5xx).
+        Permanent errors (404, auth, validation) are returned immediately.
+        """
+        for attempt in range(max_retries + 1):
+            result = self.registry.execute(tool_name, tool_input)
+
+            # Check if it's an error
+            is_error = (
+                result and (
+                    result.startswith("Error") or
+                    "HTTP 4" in result[:30] or
+                    "HTTP 5" in result[:30] or
+                    result.startswith("Blocked:")
+                )
+            )
+
+            if not is_error:
+                return result
+
+            # Check if it's a transient error worth retrying
+            is_transient = any(pat.lower() in result.lower() for pat in self._TRANSIENT_PATTERNS)
+
+            if not is_transient or attempt >= max_retries:
+                # Permanent error or max retries reached — format for LLM
+                if attempt > 0:
+                    logger.warning(f"{self.config.name}: tool {tool_name} failed after {attempt + 1} attempts: {result[:200]}")
+                else:
+                    logger.warning(f"{self.config.name}: tool {tool_name} error: {result[:200]}")
+                return result
+
+            # Transient — retry with backoff
+            backoff = [1, 3][min(attempt, 1)]
+            logger.info(f"{self.config.name}: tool {tool_name} transient error, retrying in {backoff}s (attempt {attempt + 1}/{max_retries})")
+            time.sleep(backoff)
+
+        return result  # Should not reach here, but safety fallback
+
     # ─── Pre-Compaction Flush ─────────────────────────────────
 
     # Compact system prompt for the flush summarizer — kept minimal to save tokens
@@ -865,14 +1004,24 @@ class Agent:
         try:
             # Step 1: Auto-search memory for relevant context (scoped to this agent)
             memory_context = ""
-            if self.config.auto_memory_search and self.memory:
+            if self.config.auto_memory_search and self.memory and len(message) >= 20:
                 memories = self.memory.search(
                     query=message,
                     top_k=self.config.memory_search_top_k,
                     where=f"agent_id = '{self.config.name}'",
                 )
                 if memories:
-                    memory_context = self._format_memories(memories)
+                    # Filter by relevance threshold — skip low-relevance noise
+                    threshold = self.config.auto_recall_threshold
+                    total_found = len(memories)
+                    memories = [m for m in memories if m.get("_distance", 1.0) < threshold]
+                    if total_found != len(memories):
+                        logger.debug(
+                            f"{self.config.name}: auto-recall: {total_found} found, "
+                            f"{len(memories)} above threshold (distance < {threshold})"
+                        )
+                    if memories:
+                        memory_context = self._format_memories(memories)
 
             # Step 2: Build the full system prompt with memory
             full_system = self.system_prompt
@@ -897,6 +1046,10 @@ class Agent:
             # This is critical: the LLM needs to see its own tool calls in prior turns
             # to maintain the "I must call tools to perform actions" behavior pattern.
             self.history.extend(new_messages)
+
+            # Step 5.5: Reflection — post-session self-evaluation
+            if self.config.reflection_enabled and self.memory and tool_call_count > 0:
+                self._run_reflection(message, response, tool_call_count)
 
             # Trim if we've grown past the window, then save to disk
             self.history = self._trim_history(self.history)
@@ -923,7 +1076,98 @@ class Agent:
             metrics.record_error(self.config.name, str(e),
                                  provider=self.llm.provider, model=self.llm.model)
             logger.error(f"{self.config.name}: error after {elapsed_ms}ms: {e}")
+            # Fire error alert if threshold exceeded
+            try:
+                from .alerting import check_error_alert
+                check_error_alert(self.config.name, str(e))
+            except Exception:
+                pass  # Never let alerting break the agent
             raise
+
+    # ─── Reflection Loop ─────────────────────────────────────
+
+    _REFLECTION_SYSTEM_PROMPT = (
+        "You are a self-improvement assistant for an AI agent. Review the agent's session "
+        "and provide a brief reflection. Be honest and constructive.\n\n"
+        "Evaluate:\n"
+        "1. Did the agent accomplish its task effectively?\n"
+        "2. Were tool calls efficient or were there wasted/redundant calls?\n"
+        "3. What would you do differently next time?\n"
+        "4. Rate confidence in the outcome: 1 (no confidence) to 10 (fully confident)\n\n"
+        "Format your response as:\n"
+        "CONFIDENCE: <1-10>\n"
+        "REFLECTION: <2-4 bullet points>\n"
+        "LESSON: <one key takeaway for future sessions>"
+    )
+
+    def _run_reflection(self, task: str, response: str, tool_call_count: int):
+        """
+        Run post-session self-evaluation and store as a decision memory.
+
+        Best-effort — never crashes the agent. Adds ~1-2 seconds per session.
+        """
+        try:
+            prompt = (
+                f"Task given: {task[:500]}\n"
+                f"Tools called: {tool_call_count}\n"
+                f"Final response (excerpt): {response[:800]}\n\n"
+                "Reflect on this session."
+            )
+
+            if self.llm.provider == "anthropic":
+                result = self.llm.anthropic_client.messages.create(
+                    model=self.llm.model,
+                    max_tokens=512,
+                    temperature=0.3,
+                    system=self._REFLECTION_SYSTEM_PROMPT,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                text_parts = [b.text for b in result.content if hasattr(b, "text")]
+                reflection = "\n".join(text_parts).strip()
+            else:
+                import urllib.request as _urllib_req
+                url = f"{self.llm.base_url}/v1/chat/completions"
+                payload = {
+                    "model": self.llm.model,
+                    "max_tokens": 512,
+                    "temperature": 0.3,
+                    "messages": [
+                        {"role": "system", "content": self._REFLECTION_SYSTEM_PROMPT},
+                        {"role": "user", "content": prompt},
+                    ],
+                }
+                headers = {"Content-Type": "application/json", "User-Agent": "Alfred-AI/1.0"}
+                if self.llm.api_key and self.llm.provider != "ollama":
+                    headers["Authorization"] = f"Bearer {self.llm.api_key}"
+                data = json.dumps(payload).encode("utf-8")
+                req = _urllib_req.Request(url, data=data, headers=headers, method="POST")
+                with _urllib_req.urlopen(req, timeout=30) as resp:
+                    r = json.loads(resp.read().decode("utf-8"))
+                reflection = r["choices"][0]["message"].get("content", "").strip()
+
+            if not reflection:
+                return
+
+            # Extract confidence score
+            import re
+            confidence_match = re.search(r"CONFIDENCE:\s*(\d+)", reflection)
+            confidence = int(confidence_match.group(1)) / 10.0 if confidence_match else 0.5
+
+            # Store as a decision memory
+            from models.base import MemoryRecord
+            record = MemoryRecord(
+                content=f"Session reflection: {reflection}",
+                memory_type="decision",
+                tags="reflection,auto,self-evaluation",
+                agent_id=self.config.name,
+                source="reflection_loop",
+                importance=min(1.0, confidence),  # Higher confidence = more important to remember
+            )
+            self.memory.store(record, dedup=False)
+            logger.info(f"{self.config.name}: reflection stored (confidence: {confidence:.1f})")
+
+        except Exception as e:
+            logger.debug(f"{self.config.name}: reflection failed (non-fatal): {e}")
 
     def _run_anthropic_loop(self, message: str, system: str, tool_names: list[str]) -> tuple[str, int, int, int, list[dict]]:
         """
@@ -978,10 +1222,9 @@ class Agent:
                     if block.type == "tool_use":
                         tool_call_count += 1
                         logger.info(f"{self.config.name}: tool {block.name}({json.dumps(block.input)[:200]})")
-                        result = self.registry.execute(block.name, block.input)
-                        # Log errors/failures so they're visible in logs
-                        if result and (result.startswith("Error") or "HTTP 4" in result[:20] or "HTTP 5" in result[:20]):
-                            logger.warning(f"{self.config.name}: tool {block.name} returned: {result[:200]}")
+                        result = self._execute_tool_with_retry(block.name, block.input)
+                        # Summarize large results to save context
+                        result = self._maybe_summarize_tool_result(block.name, result)
                         tool_results.append({
                             "type": "tool_result",
                             "tool_use_id": block.id,
@@ -1009,13 +1252,21 @@ class Agent:
                 return response_text, tool_call_count, total_input_tokens, total_output_tokens, new_messages
 
         # Max rounds exceeded — still return what we have
+        logger.warning(
+            f"{self.config.name}: max tool rounds ({self.config.max_tool_rounds}) "
+            f"exceeded — {tool_call_count} tool calls made"
+        )
         new_messages = []
         for msg in messages[history_start_idx:]:
             new_messages.append({
                 "role": msg["role"],
                 "content": self._serialize_content(msg["content"]),
             })
-        return "Error: Max tool rounds exceeded", tool_call_count, total_input_tokens, total_output_tokens, new_messages
+        error_msg = (
+            f"I ran out of tool rounds ({self.config.max_tool_rounds} max) before finishing. "
+            f"I made {tool_call_count} tool calls. The task may be partially complete."
+        )
+        return error_msg, tool_call_count, total_input_tokens, total_output_tokens, new_messages
 
     def _run_openai_loop(self, message: str, system: str, tool_names: list[str]) -> tuple[str, int, int, int, list[dict]]:
         """
@@ -1098,10 +1349,9 @@ class Agent:
                     fn_args = json.loads(tc["function"]["arguments"])
                     tool_call_count += 1
                     logger.info(f"{self.config.name}: tool {fn_name}({json.dumps(fn_args)[:200]})")
-                    tool_result = self.registry.execute(fn_name, fn_args)
-                    # Log errors/failures so they're visible in logs
-                    if tool_result and (tool_result.startswith("Error") or "HTTP 4" in tool_result[:20] or "HTTP 5" in tool_result[:20]):
-                        logger.warning(f"{self.config.name}: tool {fn_name} returned: {tool_result[:200]}")
+                    tool_result = self._execute_tool_with_retry(fn_name, fn_args)
+                    # Summarize large results to save context
+                    tool_result = self._maybe_summarize_tool_result(fn_name, tool_result)
 
                     tool_msg = {
                         "role": "tool",
@@ -1117,7 +1367,15 @@ class Agent:
                 new_messages.append(final_msg)
                 return response_text, tool_call_count, total_input_tokens, total_output_tokens, new_messages
 
-        return "Error: Max tool rounds exceeded", tool_call_count, total_input_tokens, total_output_tokens, new_messages
+        logger.warning(
+            f"{self.config.name}: max tool rounds ({self.config.max_tool_rounds}) "
+            f"exceeded — {tool_call_count} tool calls made"
+        )
+        error_msg = (
+            f"I ran out of tool rounds ({self.config.max_tool_rounds} max) before finishing. "
+            f"I made {tool_call_count} tool calls. The task may be partially complete."
+        )
+        return error_msg, tool_call_count, total_input_tokens, total_output_tokens, new_messages
 
     def _openai_history_messages(self) -> list[dict]:
         """

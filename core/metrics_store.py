@@ -17,6 +17,11 @@ DB_PATH = Config.DATA_DIR / "metrics.db"
 
 # Time offsets for SQLite datetime() function
 _PERIOD_OFFSETS = {
+    "5m": "-5 minutes",
+    "15m": "-15 minutes",
+    "30m": "-30 minutes",
+    "1h": "-1 hour",
+    "12h": "-12 hours",
     "day": "-1 day",
     "week": "-7 days",
     "month": "-30 days",
@@ -33,6 +38,7 @@ SELECT
     SUM(elapsed_ms) as total_elapsed_ms,
     SUM(input_tokens) as input_tokens,
     SUM(output_tokens) as output_tokens,
+    SUM(COALESCE(estimated_cost, 0)) as total_cost,
     MAX(timestamp) as last_activity
 FROM events
 WHERE timestamp >= datetime('now', ?)
@@ -50,6 +56,7 @@ SELECT
     SUM(elapsed_ms) as total_elapsed_ms,
     SUM(input_tokens) as input_tokens,
     SUM(output_tokens) as output_tokens,
+    SUM(COALESCE(estimated_cost, 0)) as total_cost,
     MAX(timestamp) as last_activity
 FROM events
 WHERE timestamp >= datetime('now', ?)
@@ -80,6 +87,31 @@ class MetricsStore:
         conn.row_factory = sqlite3.Row
         return conn
 
+    # Cost per 1M tokens (USD) — update as pricing changes
+    MODEL_PRICING = {
+        # Anthropic
+        "claude-sonnet-4-6": {"input": 3.0, "output": 15.0},
+        "claude-sonnet-4-5-20250929": {"input": 3.0, "output": 15.0},
+        "claude-haiku-3-5": {"input": 0.80, "output": 4.0},
+        "claude-opus-4": {"input": 15.0, "output": 75.0},
+        # xAI
+        "grok-3-fast": {"input": 5.0, "output": 25.0},
+        "grok-4-1-fast-reasoning": {"input": 5.0, "output": 25.0},
+        # OpenAI
+        "gpt-5.2": {"input": 5.0, "output": 15.0},
+        "gpt-4o": {"input": 2.50, "output": 10.0},
+        # Ollama — free (local)
+    }
+
+    def _estimate_cost(self, model: str, input_tokens: int, output_tokens: int) -> float:
+        """Estimate cost in USD for a given model and token count."""
+        pricing = self.MODEL_PRICING.get(model, {})
+        if not pricing:
+            return 0.0
+        input_cost = (input_tokens / 1_000_000) * pricing.get("input", 0)
+        output_cost = (output_tokens / 1_000_000) * pricing.get("output", 0)
+        return round(input_cost + output_cost, 6)
+
     def _init_db(self):
         """Create tables and indexes if they don't exist."""
         with self._conn() as conn:
@@ -96,7 +128,8 @@ class MetricsStore:
                     input_tokens  INTEGER DEFAULT 0,
                     output_tokens INTEGER DEFAULT 0,
                     is_error      INTEGER DEFAULT 0,
-                    error_text    TEXT    DEFAULT ''
+                    error_text    TEXT    DEFAULT '',
+                    estimated_cost REAL   DEFAULT 0.0
                 )
             """)
             conn.execute(
@@ -105,21 +138,30 @@ class MetricsStore:
             conn.execute(
                 "CREATE INDEX IF NOT EXISTS idx_events_agent ON events(agent, timestamp)"
             )
+            # Add estimated_cost column if it doesn't exist (migration for existing DBs)
+            try:
+                conn.execute("SELECT estimated_cost FROM events LIMIT 1")
+            except Exception:
+                try:
+                    conn.execute("ALTER TABLE events ADD COLUMN estimated_cost REAL DEFAULT 0.0")
+                except Exception:
+                    pass
 
     def record(self, agent: str, provider: str, model: str,
                elapsed_ms: int, tool_calls: int,
                input_tokens: int, output_tokens: int):
-        """Record a successful agent interaction."""
+        """Record a successful agent interaction with estimated cost."""
         now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        cost = self._estimate_cost(model or "", input_tokens, output_tokens)
         try:
             with self._conn() as conn:
                 conn.execute(
                     """INSERT INTO events
                        (timestamp, agent, provider, model, messages, tool_calls,
-                        elapsed_ms, input_tokens, output_tokens, is_error)
-                       VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, 0)""",
+                        elapsed_ms, input_tokens, output_tokens, is_error, estimated_cost)
+                       VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, 0, ?)""",
                     (now, agent, provider or "", model or "",
-                     tool_calls, elapsed_ms, input_tokens, output_tokens),
+                     tool_calls, elapsed_ms, input_tokens, output_tokens, cost),
                 )
         except Exception:
             pass  # Never let metrics storage break the agent
@@ -180,6 +222,7 @@ class MetricsStore:
                         "total_elapsed_ms": total_ms,
                         "input_tokens": row["input_tokens"] or 0,
                         "output_tokens": row["output_tokens"] or 0,
+                        "estimated_cost": round(row["total_cost"] or 0, 4),
                         "last_activity": row["last_activity"],
                         "avg_ms": total_ms // msgs if msgs else 0,
                         "total_tokens": (row["input_tokens"] or 0) + (row["output_tokens"] or 0),
@@ -198,6 +241,7 @@ class MetricsStore:
                         "total_elapsed_ms": total_ms,
                         "input_tokens": row["input_tokens"] or 0,
                         "output_tokens": row["output_tokens"] or 0,
+                        "estimated_cost": round(row["total_cost"] or 0, 4),
                         "last_activity": row["last_activity"],
                         "avg_ms": total_ms // msgs if msgs else 0,
                         "total_tokens": (row["input_tokens"] or 0) + (row["output_tokens"] or 0),
@@ -211,6 +255,12 @@ class MetricsStore:
             "agents": agents_result,
             "models": models_result,
         }
+
+    def delete_by_agent(self, agent: str) -> int:
+        """Delete all metrics for a given agent. Returns rows deleted."""
+        with self._conn() as conn:
+            cur = conn.execute("DELETE FROM events WHERE agent = ?", (agent,))
+            return cur.rowcount
 
     def totals(self) -> dict:
         """

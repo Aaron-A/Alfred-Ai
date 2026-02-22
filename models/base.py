@@ -22,6 +22,8 @@ class MemoryRecord:
     agent_id: str = ""  # Which agent created this
     tags: str = ""  # Comma-separated tags for filtering
     memory_type: str = "generic"  # Discriminator field
+    importance: float = 0.5  # 0.0-1.0 — how critical this memory is (affects search ranking)
+    linked_ids: str = ""  # Comma-separated IDs for outcome linking (e.g., decision → trade)
 
     def to_dict(self) -> dict:
         """Convert to dictionary for storage."""

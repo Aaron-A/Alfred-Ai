@@ -251,6 +251,7 @@ class MemoryStore:
         memory_type: str = None,
         top_k: int = None,
         where: str = None,
+        filters: dict = None,
     ) -> list[dict]:
         """
         Search across memories using hybrid (vector + BM25) or vector-only search.
@@ -265,11 +266,29 @@ class MemoryStore:
                         If None, searches all memory tables.
             top_k: Number of results to return
             where: SQL-like filter string (e.g., "symbol = 'TSLA' AND outcome = 'win'")
+            filters: Dict of field->value for structured filtering
+                    (e.g., {"symbol": "BTC/USD", "outcome": "win"})
 
         Returns:
             List of dicts with memory fields + _relevance_score (hybrid) or _distance (vector)
         """
+        import time as _time
+        _search_start = _time.monotonic()
+
         top_k = top_k or config.DEFAULT_TOP_K
+
+        # Merge structured filters into where clause
+        if filters:
+            filter_clauses = []
+            for k, v in filters.items():
+                if isinstance(v, str):
+                    filter_clauses.append(f"{k} = '{v}'")
+                elif isinstance(v, (int, float)):
+                    filter_clauses.append(f"{k} = {v}")
+            if filter_clauses:
+                filter_where = " AND ".join(filter_clauses)
+                where = f"{where} AND {filter_where}" if where else filter_where
+
         query_vector = self.embedder.embed_query(query)
 
         # Check if hybrid search is enabled in config
@@ -327,9 +346,68 @@ class MemoryStore:
         # Apply temporal decay if we have timestamps
         results = self._apply_temporal_decay(results)
 
+        # Apply importance boost — high-importance memories rank higher
+        results = self._apply_importance_boost(results)
+
         # Sort by combined score (lower = better) and trim to top_k
         results.sort(key=lambda x: x.get("_distance", float("inf")))
-        return results[:top_k]
+        final = results[:top_k]
+
+        # Log vector query for observability
+        _search_elapsed = int((_time.monotonic() - _search_start) * 1000)
+        avg_dist = 0.0
+        if final:
+            avg_dist = sum(r.get("_distance", 0) for r in final) / len(final)
+        self._log_vector_query(
+            query=query, memory_type=memory_type, top_k=top_k,
+            result_count=len(final), avg_distance=avg_dist,
+            elapsed_ms=_search_elapsed,
+        )
+
+        return final
+
+    def _log_vector_query(
+        self,
+        query: str,
+        memory_type: Optional[str],
+        top_k: int,
+        result_count: int,
+        avg_distance: float,
+        elapsed_ms: int,
+    ):
+        """Log a vector search query to SQLite for observability."""
+        try:
+            import sqlite3
+            db_path = config.DATA_DIR / "metrics.db"
+            conn = sqlite3.connect(str(db_path))
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS vector_queries (
+                    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp     TEXT    NOT NULL,
+                    agent         TEXT    DEFAULT '',
+                    query_text    TEXT    NOT NULL,
+                    memory_type   TEXT    DEFAULT '',
+                    top_k         INTEGER DEFAULT 10,
+                    result_count  INTEGER DEFAULT 0,
+                    avg_distance  REAL    DEFAULT 0.0,
+                    elapsed_ms    INTEGER DEFAULT 0
+                )
+            """)
+            conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_vq_ts ON vector_queries(timestamp)
+            """)
+            now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+            conn.execute(
+                """INSERT INTO vector_queries
+                   (timestamp, agent, query_text, memory_type, top_k, result_count, avg_distance, elapsed_ms)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (now, self.agent_id, query[:500], memory_type or "", top_k,
+                 result_count, round(avg_distance, 4), elapsed_ms),
+            )
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass  # Never let logging break search
 
     def _apply_temporal_decay(
         self,
@@ -391,6 +469,106 @@ class MemoryStore:
             r["_distance"] = 1.0 - combined
             r["_recency"] = recency
             r["_age_days"] = round(age_days, 1)
+
+        return results
+
+    def _apply_importance_boost(self, results: list[dict]) -> list[dict]:
+        """
+        Boost high-importance memories in search results.
+
+        Memories with importance > 0.5 get a relevance bonus,
+        those below 0.5 get a slight penalty. The effect is capped
+        at ~20% distance adjustment so importance complements but
+        never overrides semantic similarity.
+
+        The math:
+            boost = (importance - 0.5) * 0.2  (range: -0.1 to +0.1)
+            adjusted_distance = distance - boost  (lower distance = better)
+        """
+        for r in results:
+            importance = r.get("importance", 0.5)
+            if importance is None:
+                importance = 0.5
+
+            # Clamp to valid range
+            importance = max(0.0, min(1.0, float(importance)))
+
+            # Calculate boost: +0.1 for importance=1.0, 0 for 0.5, -0.1 for 0.0
+            boost = (importance - 0.5) * 0.2
+            raw_distance = r.get("_distance", 0.5)
+            r["_distance"] = max(0.0, min(1.0, raw_distance - boost))
+            r["_importance"] = importance
+
+        return results
+
+    def compact(
+        self,
+        memory_type: str = None,
+        max_age_days: int = 90,
+        min_importance: float = 0.3,
+    ) -> dict:
+        """
+        Prune old, low-importance memories to keep the store manageable.
+
+        Deletes records that are BOTH:
+        - Older than max_age_days
+        - Below min_importance threshold
+
+        Records with importance >= 0.7 are NEVER deleted (lessons learned are permanent).
+
+        Args:
+            memory_type: Specific type to compact (None = all tables)
+            max_age_days: Only prune records older than this
+            min_importance: Only prune records below this importance
+
+        Returns:
+            Dict of {table_name: records_deleted}
+        """
+        from datetime import timedelta
+
+        results = {}
+        cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+        cutoff_iso = cutoff.isoformat()
+
+        # Determine which tables to compact
+        if memory_type:
+            table_names = [self._table_name(memory_type)]
+        else:
+            table_names = [
+                t for t in self._list_table_names()
+                if t.startswith(config.MEMORY_TABLE_PREFIX)
+            ]
+
+        for table_name in table_names:
+            try:
+                table = self.db.open_table(table_name)
+
+                # Find records that are old AND low importance
+                # LanceDB where clause format
+                where = (
+                    f"created_at < '{cutoff_iso}' AND "
+                    f"importance < {min_importance} AND "
+                    f"importance < 0.7"  # Safety: never delete high-importance
+                )
+
+                # Count before delete
+                try:
+                    to_delete = table.search().where(where).limit(10000).to_list()
+                    count = len(to_delete)
+                except Exception:
+                    count = 0
+
+                if count > 0:
+                    table.delete(where)
+                    short_name = table_name.replace(config.MEMORY_TABLE_PREFIX, "")
+                    logger.info(f"Compacted {short_name}: removed {count} records "
+                              f"(>{max_age_days} days, importance <{min_importance})")
+
+                results[table_name] = count
+
+            except Exception as e:
+                logger.warning(f"Compact failed on {table_name}: {e}")
+                results[table_name] = 0
 
         return results
 

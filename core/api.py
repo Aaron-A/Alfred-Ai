@@ -206,7 +206,7 @@ def create_app() -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
-        allow_credentials=True,
+        allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],
     )
@@ -650,13 +650,13 @@ def create_app() -> FastAPI:
     # ─── Metrics ──────────────────────────────────────────
 
     @app.get("/v1/metrics")
-    async def get_metrics(agent: str = None, period: str = "session"):
+    async def get_metrics(agent: str = None, period: str = "day"):
         """
         Get agent activity metrics.
 
         Args:
             agent: Filter to a specific agent
-            period: session (current in-memory), day, week, month, year, all
+            period: 5m, 15m, 30m, 1h, 12h, day, week, month, year, all, session
         """
         if period == "session":
             # Existing behavior — current in-memory snapshot
@@ -668,6 +668,48 @@ def create_app() -> FastAPI:
         from .metrics_store import MetricsStore
         store = MetricsStore()
         return store.query(period=period, agent=agent)
+
+    @app.get("/v1/vector-queries")
+    async def get_vector_queries(agent: str = None, period: str = "day", limit: int = 50):
+        """
+        Get vector search query logs for observability.
+
+        Shows what the agents are searching for, how many results come back,
+        and average relevance scores.
+        """
+        import sqlite3
+        from .metrics_store import _PERIOD_OFFSETS
+
+        offset = _PERIOD_OFFSETS.get(period, _PERIOD_OFFSETS["day"])
+        db_path = config.DATA_DIR / "metrics.db"
+
+        try:
+            conn = sqlite3.connect(str(db_path))
+            conn.row_factory = sqlite3.Row
+
+            if agent:
+                rows = conn.execute(
+                    """SELECT * FROM vector_queries
+                       WHERE timestamp >= datetime('now', ?) AND agent = ?
+                       ORDER BY timestamp DESC LIMIT ?""",
+                    (offset, agent, limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    """SELECT * FROM vector_queries
+                       WHERE timestamp >= datetime('now', ?)
+                       ORDER BY timestamp DESC LIMIT ?""",
+                    (offset, limit),
+                ).fetchall()
+
+            conn.close()
+            return {
+                "queries": [dict(r) for r in rows],
+                "count": len(rows),
+                "period": period,
+            }
+        except Exception as e:
+            return {"queries": [], "count": 0, "error": str(e)}
 
     # ─── Webhooks ─────────────────────────────────────────
 
@@ -1001,12 +1043,30 @@ def create_app() -> FastAPI:
         # 3. Save config
         _save_config(cfg)
 
-        # 4. Delete workspace directory
+        # 4. Purge metrics
+        try:
+            from .metrics_store import MetricsStore
+            deleted_rows = MetricsStore().delete_by_agent(name)
+            logger.info(f"Purged {deleted_rows} metric rows for agent '{name}'")
+        except Exception as e:
+            logger.warning(f"Metrics cleanup failed for '{name}': {e}")
+
+        # 5. Purge memory vectors from all LanceDB tables
+        try:
+            from .memory import MemoryStore
+            ms = MemoryStore()
+            for table_name in ms.list_tables():
+                tbl = ms.db.open_table(table_name)
+                tbl.delete(f"agent_id = '{name}'")
+        except Exception as e:
+            logger.warning(f"Memory cleanup failed for '{name}': {e}")
+
+        # 6. Delete workspace directory
         workspace_dir = config.PROJECT_ROOT / "workspaces" / name
         if workspace_dir.exists():
             shutil.rmtree(workspace_dir)
 
-        # 5. Evict from agent pool
+        # 7. Evict from agent pool
         async with pool._lock:
             keys_to_delete = [k for k in pool._agents if k[0] == name]
             for k in keys_to_delete:
@@ -1070,6 +1130,369 @@ def create_app() -> FastAPI:
             "model": agents_cfg[name].get("model"),
             "restart_required": True,
         }
+
+    # ─── Trading Status ────────────────────────────────
+
+    def _merge_round_trips(all_trades: list[dict]) -> list[dict]:
+        """Merge entry+exit CSV rows into single round-trip rows.
+
+        Computes P&L from actual entry/exit prices rather than trusting
+        the CSV's pnl field (which can be wrong due to weighted-average
+        cost basis contamination from historical seed trades).
+        Handles partial closes by reducing current_entry qty.
+        """
+        merged = []
+        current_entry = None
+
+        for t in all_trades:
+            action = (t.get("action") or "").upper()
+            side = (t.get("side") or "").upper()
+            pnl_raw = (t.get("pnl") or "").strip()
+
+            # Classify as entry or exit
+            is_entry = False
+            is_exit = False
+
+            if action == "ENTER_SUBMITTED":
+                is_entry = True
+            elif action == "EXIT_SUBMITTED":
+                is_exit = True
+            elif action == "FILL":
+                if pnl_raw:
+                    is_exit = True
+                else:
+                    is_entry = True
+
+            if is_entry:
+                if current_entry is None:
+                    current_entry = {
+                        "time": t.get("timestamp_et") or t.get("timestamp_utc", ""),
+                        "side": side,
+                        "qty": float(t.get("qty") or 0),
+                        "price": float(t.get("price") or 0),
+                        "reason": t.get("reason", ""),
+                    }
+                else:
+                    # Adding to position — weighted average entry price
+                    try:
+                        old_qty = current_entry["qty"]
+                        old_price = current_entry["price"]
+                        new_qty = float(t.get("qty") or 0)
+                        new_price = float(t.get("price") or 0)
+                        total_qty = old_qty + new_qty
+                        if total_qty > 0:
+                            current_entry["price"] = (
+                                old_price * old_qty + new_price * new_qty
+                            ) / total_qty
+                            current_entry["qty"] = total_qty
+                    except (ValueError, ZeroDivisionError):
+                        pass
+
+            elif is_exit:
+                exit_price = float(t.get("price") or 0)
+                exit_qty = float(t.get("qty") or 0)
+                entry_price = current_entry["price"] if current_entry else 0
+                entry_time = current_entry["time"] if current_entry else ""
+                direction = "LONG"
+                if current_entry and current_entry["side"] == "SELL":
+                    direction = "SHORT"
+
+                # Compute P&L from actual entry/exit prices (ground truth)
+                computed_pnl = None
+                if current_entry and entry_price and exit_price:
+                    if direction == "LONG":
+                        computed_pnl = (exit_price - entry_price) * exit_qty
+                    else:
+                        computed_pnl = (entry_price - exit_price) * exit_qty
+
+                merged.append({
+                    "exit_time": t.get("timestamp_et") or t.get("timestamp_utc", ""),
+                    "entry_time": entry_time,
+                    "direction": direction,
+                    "entry_price": str(entry_price) if entry_price else "",
+                    "exit_price": str(exit_price) if exit_price else "",
+                    "qty": t.get("qty", ""),
+                    "pnl": f"{computed_pnl:.2f}" if computed_pnl is not None else None,
+                    "reason": t.get("reason", ""),
+                    "status": "closed",
+                })
+
+                # Reduce position instead of wiping — handles partial closes
+                if current_entry:
+                    current_entry["qty"] -= exit_qty
+                    if current_entry["qty"] <= 0.001:
+                        current_entry = None
+
+        # Trailing open position (entry with no exit yet)
+        if current_entry and current_entry["qty"] > 0.001:
+            direction = "SHORT" if current_entry["side"] == "SELL" else "LONG"
+            merged.append({
+                "exit_time": "",
+                "entry_time": current_entry["time"],
+                "direction": direction,
+                "entry_price": str(current_entry["price"]),
+                "exit_price": "",
+                "qty": f"{current_entry['qty']:.5f}",
+                "pnl": None,
+                "reason": current_entry["reason"],
+                "status": "open",
+            })
+
+        return merged
+
+    def _pair_orders_as_scalps(orders: list[dict]) -> list[dict]:
+        """Pair Alpaca closed orders into scalp round-trips with correct P&L.
+
+        The bot maintains a base position and does sell→buy scalps.
+        This function:
+        1. Skips the initial position-building phase (consecutive same-side orders)
+        2. Pairs each exit (sell) with the next re-entry (buy) as one round-trip
+        3. P&L = (sell_price - buy_price) * qty for LONG positions
+
+        This shows actual scalp performance including losses, unlike weighted-
+        average accounting which always shows wins due to low initial cost basis.
+        """
+        from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+
+        _ET = _tz(_td(hours=-5))
+
+        def _fmt_et(ts_raw: str) -> str:
+            try:
+                dt = _dt.fromisoformat(ts_raw.replace("Z", "+00:00"))
+                return dt.astimezone(_ET).strftime("%Y-%m-%dT%H:%M:%S")
+            except Exception:
+                return ts_raw[:19] if ts_raw else ""
+
+        # Filter to orders with actual fills, sorted chronologically
+        filled = [
+            o for o in orders
+            if float(o.get("filled_qty") or 0) > 0
+        ]
+        filled.sort(key=lambda x: x.get("filled_at") or x.get("created_at", ""))
+
+        if not filled:
+            return []
+
+        # Detect initial position-building: consecutive same-direction orders
+        init_side = filled[0].get("side", "")
+        first_opposite = 0
+        for i, o in enumerate(filled):
+            if o.get("side", "") != init_side:
+                first_opposite = i
+                break
+
+        # Pair orders from first opposite-direction onward: exit → re-entry
+        trades = []
+        pending_exit = None
+
+        for o in filled[first_opposite:]:
+            side = o.get("side", "")
+            qty = float(o.get("filled_qty") or 0)
+            price = float(o.get("filled_avg_price") or 0)
+            ts = _fmt_et(o.get("filled_at") or o.get("created_at", ""))
+
+            # For LONG positions: sell is exit, buy is re-entry
+            # For SHORT positions: buy is exit, sell is re-entry
+            is_exit = (init_side == "buy" and side == "sell") or \
+                      (init_side == "sell" and side == "buy")
+
+            if is_exit:
+                pending_exit = {"qty": qty, "price": price, "time": ts}
+            elif pending_exit is not None:
+                # Re-entry after exit — complete the round-trip
+                rt_qty = min(pending_exit["qty"], qty)
+                if init_side == "buy":
+                    # LONG: sold then bought back
+                    pnl = (pending_exit["price"] - price) * rt_qty
+                    direction = "LONG"
+                else:
+                    # SHORT: bought then sold back
+                    pnl = (price - pending_exit["price"]) * rt_qty
+                    direction = "SHORT"
+
+                trades.append({
+                    "exit_time": pending_exit["time"],
+                    "entry_time": ts,
+                    "direction": direction,
+                    "entry_price": f"{price:.2f}" if init_side == "buy" else f"{pending_exit['price']:.2f}",
+                    "exit_price": f"{pending_exit['price']:.2f}" if init_side == "buy" else f"{price:.2f}",
+                    "qty": f"{rt_qty:.5f}",
+                    "pnl": f"{pnl:.2f}",
+                    "reason": "",
+                    "status": "closed",
+                })
+                pending_exit = None
+
+        return trades
+
+    # Cache for Alpaca API responses (avoid hammering on every 10s dashboard refresh)
+    _trading_cache: dict = {"data": None, "ts": 0.0}
+    _TRADING_CACHE_TTL = 10  # seconds
+
+    @app.get("/v1/trading/status")
+    async def trading_status(since: str = None):
+        """Return BTC trading bot status, account info, price bars, and trade history.
+
+        Args:
+            since: ISO timestamp for incremental bar loading. When provided,
+                   only bars after this timestamp are returned (lightweight).
+                   When omitted, returns last 7h of bars (initial load).
+        """
+        import csv
+        import httpx
+
+        now = time.time()
+        # Use cache only for full (non-incremental) requests
+        if not since and _trading_cache["data"] and (now - _trading_cache["ts"]) < _TRADING_CACHE_TTL:
+            return _trading_cache["data"]
+
+        result = {
+            "account": None,
+            "position": None,
+            "bot_running": False,
+            "bars": [],
+            "trades": [],
+            "initial_equity": None,
+        }
+
+        # Check bot PID
+        pid_file = config.PROJECT_ROOT / "workspaces" / "btc-trader" / "bot" / "bot.pid"
+        if pid_file.exists():
+            try:
+                pid = int(pid_file.read_text().strip())
+                os.kill(pid, 0)
+                result["bot_running"] = True
+            except (ProcessLookupError, ValueError):
+                pass
+
+        # Get Alpaca credentials
+        creds = config.get_service_credentials("alpaca") if hasattr(config, "get_service_credentials") else {}
+        if not creds:
+            cfg = _load_config()
+            creds = cfg.get("services", {}).get("alpaca", {})
+
+        api_key = creds.get("api_key", "")
+        secret_key = creds.get("secret_key", "")
+        base_url = creds.get("base_url", "https://paper-api.alpaca.markets")
+        data_url = creds.get("data_url", "https://data.alpaca.markets")
+        result["initial_equity"] = creds.get("initial_equity")
+
+        headers = {
+            "APCA-API-KEY-ID": api_key,
+            "APCA-API-SECRET-KEY": secret_key,
+        }
+
+        if api_key:
+            async with httpx.AsyncClient(timeout=10) as client:
+                # Account — independent try/except so failures don't block other calls
+                try:
+                    resp = await client.get(f"{base_url}/v2/account", headers=headers)
+                    if resp.status_code == 200:
+                        acct = resp.json()
+                        result["account"] = {
+                            "equity": acct.get("equity"),
+                            "buying_power": acct.get("buying_power"),
+                            "cash": acct.get("cash"),
+                            "portfolio_value": acct.get("portfolio_value"),
+                        }
+                except Exception as e:
+                    logger.warning(f"Trading status: account fetch failed: {e}")
+
+                # Positions
+                try:
+                    resp = await client.get(f"{base_url}/v2/positions", headers=headers)
+                    if resp.status_code == 200:
+                        for pos in resp.json():
+                            sym = pos.get("symbol", "")
+                            if "BTC" in sym:
+                                result["position"] = {
+                                    "symbol": sym,
+                                    "qty": pos.get("qty"),
+                                    "side": pos.get("side"),
+                                    "entry_price": pos.get("avg_entry_price"),
+                                    "market_value": pos.get("market_value"),
+                                    "unrealized_pl": pos.get("unrealized_pl"),
+                                    "unrealized_plpc": pos.get("unrealized_plpc"),
+                                    "current_price": pos.get("current_price"),
+                                }
+                                break
+                except Exception as e:
+                    logger.warning(f"Trading status: positions fetch failed: {e}")
+
+                # BTC bars — incremental if `since`, otherwise last 7h
+                try:
+                    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+                    if since:
+                        bar_start = since
+                        bar_limit = "60"  # at most 60 new bars per incremental fetch
+                    else:
+                        bar_start = (_dt.now(_tz.utc) - _td(hours=7, minutes=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+                        bar_limit = "430"  # 7h + buffer
+                    resp = await client.get(
+                        f"{data_url}/v1beta3/crypto/us/bars",
+                        headers=headers,
+                        params={"symbols": "BTC/USD", "timeframe": "1Min", "limit": bar_limit, "sort": "asc", "start": bar_start},
+                    )
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        raw_bars = data.get("bars", {}).get("BTC/USD", [])
+                        result["bars"] = [
+                            {"t": b["t"], "o": b["o"], "h": b["h"], "l": b["l"], "c": b["c"], "v": b["v"]}
+                            for b in raw_bars
+                        ]
+                except Exception as e:
+                    logger.warning(f"Trading status: bars fetch failed: {e}")
+
+        # Fetch closed orders from Alpaca and pair into scalp round-trips
+        if api_key:
+            orders_ok = False
+            try:
+                async with httpx.AsyncClient(timeout=10) as client2:
+                    all_orders = []
+                    # Fetch up to 3 pages of 100 closed orders
+                    after_ts = None
+                    for _ in range(3):
+                        params = {"status": "closed", "limit": "100", "direction": "asc"}
+                        if after_ts:
+                            params["after"] = after_ts
+                        resp = await client2.get(
+                            f"{base_url}/v2/orders",
+                            headers=headers,
+                            params=params,
+                        )
+                        if resp.status_code != 200:
+                            logger.warning(f"Trading status: orders fetch returned {resp.status_code}")
+                            break
+                        page = resp.json()
+                        if not page:
+                            break
+                        all_orders.extend(page)
+                        if len(page) < 100:
+                            break
+                        after_ts = page[-1]["created_at"]
+
+                    if all_orders:
+                        result["trades"] = _pair_orders_as_scalps(all_orders)[-20:]
+                        orders_ok = True
+            except Exception as e:
+                logger.warning(f"Trading status: orders fetch failed: {e}")
+
+            # Fallback to CSV if Alpaca fails
+            if not orders_ok:
+                trades_file = config.PROJECT_ROOT / "workspaces" / "btc-trader" / "bot" / "trades_history.csv"
+                if trades_file.exists():
+                    try:
+                        with open(trades_file) as f:
+                            reader = csv.DictReader(f)
+                            all_trades = list(reader)
+                        result["trades"] = _merge_round_trips(all_trades)[-20:]
+                    except Exception:
+                        pass
+
+        if not since:
+            _trading_cache["data"] = result
+            _trading_cache["ts"] = now
+        return result
 
     @app.post("/v1/admin/reload")
     async def reload_daemon():

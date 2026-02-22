@@ -17,6 +17,7 @@
   </div>
   <div class="header-right">
     <a href="/architecture" style="font-size:11px;color:#888;text-decoration:none;letter-spacing:1px;margin-right:16px;transition:color 0.15s;" onmouseover="this.style.color='#06b6d4'" onmouseout="this.style.color='#888'">Architecture</a>
+    <button class="header-restart-btn" id="headerRestartBtn" onclick="headerRestart()">RESTART</button>
     <span class="refresh-info" id="refreshInfo"></span>
     <div class="status-indicator" id="statusIndicator">
       <span class="status-dot" id="statusDot"></span>
@@ -43,6 +44,11 @@
     <div class="stat-sub" id="statTokensSub">&nbsp;</div>
   </div>
   <div class="stat-card">
+    <div class="stat-label">EST. COST</div>
+    <div class="stat-value stat-value--green" id="statCost">-</div>
+    <div class="stat-sub" id="statCostSub">&nbsp;</div>
+  </div>
+  <div class="stat-card">
     <div class="stat-label">AVG RESPONSE</div>
     <div class="stat-value" id="statAvgMs">-</div>
     <div class="stat-sub" id="statAvgMsSub">&nbsp;</div>
@@ -59,6 +65,7 @@
   <button class="tab-btn active" data-tab="agents">AGENTS</button>
   <button class="tab-btn" data-tab="schedules">SCHEDULES</button>
   <button class="tab-btn" data-tab="metrics">METRICS</button>
+  <button class="tab-btn" data-tab="trading">TRADING</button>
 </div>
 
 <!-- ═════════ AGENTS TAB ═════════ -->
@@ -76,11 +83,12 @@
           <th>Sessions</th>
           <th>Messages</th>
           <th>Tokens</th>
+          <th>Cost</th>
           <th>Errors</th>
         </tr>
       </thead>
       <tbody id="agentsBody">
-        <tr><td colspan="7" class="text-dim" style="text-align:center;padding:24px;">Loading...</td></tr>
+        <tr><td colspan="8" class="text-dim" style="text-align:center;padding:24px;">Loading...</td></tr>
       </tbody>
     </table>
   </div>
@@ -116,8 +124,12 @@
   <!-- Period selector -->
   <div class="period-bar">
     <select id="metricsPeriod" class="period-select">
-      <option value="session">Current Session</option>
-      <option value="day">Last 24 Hours</option>
+      <option value="5m">Last 5 Minutes</option>
+      <option value="15m">Last 15 Minutes</option>
+      <option value="30m">Last 30 Minutes</option>
+      <option value="1h">Last Hour</option>
+      <option value="12h">Last 12 Hours</option>
+      <option value="day" selected>Last 24 Hours</option>
       <option value="week">Last 7 Days</option>
       <option value="month">Last 30 Days</option>
       <option value="year">Last Year</option>
@@ -136,12 +148,13 @@
         <th>Input Tokens</th>
         <th>Output Tokens</th>
         <th>Total Tokens</th>
+        <th>Cost</th>
         <th>Avg Response</th>
         <th>Errors</th>
       </tr>
     </thead>
     <tbody id="modelsBody">
-      <tr><td colspan="8" class="text-dim" style="text-align:center;padding:24px;">Loading...</td></tr>
+      <tr><td colspan="9" class="text-dim" style="text-align:center;padding:24px;">Loading...</td></tr>
     </tbody>
   </table>
 
@@ -152,6 +165,89 @@
       <div class="empty-state-icon">&#9776;</div>
       Loading metrics...
     </div>
+  </div>
+
+  <!-- Vector query logs -->
+  <div class="section-title" style="margin-top:28px;">VECTOR QUERIES</div>
+  <div class="table-wrap table-wrap--scroll">
+    <table class="data-table" id="vectorQueriesTable">
+      <thead>
+        <tr>
+          <th>Time</th>
+          <th>Agent</th>
+          <th>Query</th>
+          <th>Type</th>
+          <th>Results</th>
+          <th>Avg Distance</th>
+          <th>Elapsed</th>
+        </tr>
+      </thead>
+      <tbody id="vectorQueriesBody">
+        <tr><td colspan="7" class="text-dim" style="text-align:center;padding:24px;">No vector queries yet</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- ═════════ TRADING TAB ═════════ -->
+<div class="tab-panel" id="tab-trading">
+
+  <!-- Status Cards -->
+  <div class="trading-status-grid" id="tradingStatusGrid">
+    <div class="trading-card">
+      <div class="trading-card-label">ACCOUNT EQUITY</div>
+      <div class="trading-card-value" id="tradingEquity">—</div>
+      <div class="trading-card-sub" id="tradingEquitySub">&nbsp;</div>
+    </div>
+    <div class="trading-card">
+      <div class="trading-card-label">POSITION</div>
+      <div class="trading-card-value" id="tradingPosition">—</div>
+      <div class="trading-card-sub" id="tradingPositionSub">&nbsp;</div>
+    </div>
+    <div class="trading-card">
+      <div class="trading-card-label">BOT STATUS</div>
+      <div class="trading-card-value" id="tradingBotStatus">—</div>
+      <div class="trading-card-sub" id="tradingBotSub">&nbsp;</div>
+    </div>
+    <div class="trading-card">
+      <div class="trading-card-label">TOTAL P&L</div>
+      <div class="trading-card-value" id="tradingPnl">—</div>
+      <div class="trading-card-sub" id="tradingPnlSub">&nbsp;</div>
+    </div>
+  </div>
+
+  <!-- BTC Price Chart -->
+  <div class="chart-container">
+    <div class="chart-header">
+      <span class="section-title" style="margin:0;">BTC / USD</span>
+      <div class="chart-price-group">
+        <span class="chart-price" id="chartPrice">—</span>
+        <span class="chart-change" id="chartChange"></span>
+      </div>
+      <span class="chart-timeframe">1m bars</span>
+    </div>
+    <canvas id="btcChart"></canvas>
+  </div>
+
+  <!-- Recent Trades -->
+  <div class="section-title" style="margin-top:28px;">RECENT TRADES</div>
+  <div class="table-wrap table-wrap--scroll">
+    <table class="data-table" id="tradesTable">
+      <thead>
+        <tr>
+          <th>Time</th>
+          <th>Direction</th>
+          <th>Qty</th>
+          <th>Entry</th>
+          <th>Exit</th>
+          <th>P&L</th>
+          <th>Reason</th>
+        </tr>
+      </thead>
+      <tbody id="tradesBody">
+        <tr><td colspan="7" class="text-dim" style="text-align:center;padding:24px;">No trades yet</td></tr>
+      </tbody>
+    </table>
   </div>
 </div>
 
