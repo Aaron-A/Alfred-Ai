@@ -1,5 +1,8 @@
 # Alfred AI
 
+![Python](https://img.shields.io/badge/python-3.10+-blue.svg)
+![License: AAAL](https://img.shields.io/badge/license-AAAL-purple.svg)
+
 A memory-first agent framework in Python. Create AI agents that remember, learn, and act — with built-in Discord integration, cost tracking, and autonomous process management.
 
 ## What is Alfred?
@@ -22,25 +25,27 @@ Alfred is a lightweight framework for building persistent AI agents. Each agent 
 ## Quick Start
 
 ```bash
-# Clone and set up
+# Clone and install
 git clone https://github.com/Aaron-A/Alfred-Ai.git
 cd Alfred-Ai
-python3 -m venv venv
-source venv/bin/activate
-pip install anthropic lancedb sentence-transformers discord.py rich fastapi uvicorn
+uv sync                          # Creates venv + installs all dependencies
+uv sync --extra trading          # Include trading bot dependencies (optional)
 
 # Symlink the CLI (optional, for global access)
 sudo ln -sf "$(pwd)/alfred" /usr/local/bin/alfred
 
 # Run the setup wizard
-alfred setup
+./alfred setup
 
 # Connect to Discord
-alfred discord setup
+./alfred discord setup
 
 # Start Alfred
-alfred start
+./alfred start
 ```
+
+> **Don't have uv?** Install it with `curl -LsSf https://astral.sh/uv/install.sh | sh`
+> or see [docs.astral.sh/uv](https://docs.astral.sh/uv/getting-started/installation/).
 
 The setup wizard walks you through:
 1. Configuring your LLM provider and API key
@@ -52,12 +57,16 @@ Then `alfred discord setup` auto-discovers your server and channels, and `alfred
 
 ## CLI Reference
 
+<details>
+<summary>Click to expand full command list</summary>
+
 ```
 alfred setup                    Interactive setup wizard
 alfred start                    Start all services (API + scheduler + Discord)
 alfred start --fg               Start in foreground (Ctrl+C to stop)
 alfred start --port 8080        Start with API on custom port
 alfred stop                     Stop all services
+alfred restart                  Stop + start in one command
 alfred status                   Show configuration and running state
 alfred logs                     Tail the log file
 
@@ -96,6 +105,8 @@ alfred api start               Start API only — dev mode (port 7700)
 alfred api start --port 8080   Start on custom port
 ```
 
+</details>
+
 ## Web Dashboard
 
 Start Alfred and open `http://localhost:7700` in your browser:
@@ -117,7 +128,7 @@ The dashboard shows:
 - **+ New Agent** — create agents directly from the dashboard with optional LLM-generated SOUL.md
 - **Schedules tab** — all scheduled tasks with run stats, success rates, next fire time, manual trigger
 - **Metrics tab** — per-model cost breakdown, per-agent detail cards, and vector query logs with relevance scores
-- **Trading tab** — live BTC/USD chart, account equity, position info, bot status, recent trades with P&L
+- **Trading tab** — multi-agent view (BTC, TSLA, etc.) with live charts, account equity, positions, bot status, recent trades with P&L and IBKR commission tracking
 
 Auto-refreshes every 10 seconds.
 
@@ -481,13 +492,22 @@ Any agent can use a local model — set the provider per-agent in `alfred.json`:
 
 Ollama runs on `localhost:11434` using OpenAI-compatible APIs. Supported models include Llama, DeepSeek, Qwen, Mistral, Gemma, and anything Ollama supports.
 
+## Roadmap
+
+- **Backtesting engine** — replay historical bars through strategy logic to validate before going live
+- **Agent performance analytics** — win rate trends, drawdown curves, and Sharpe ratio tracking on the dashboard
+- **Portable agent bundles** — export and import agents as self-contained packages
+- **Mobile-responsive dashboard** — proper responsive layout for phone and tablet monitoring
+- **Webhook triggers** — trigger agent actions from external events (GitHub, Stripe, etc.)
+
 ## Requirements
 
 - Python 3.10+
+- [uv](https://docs.astral.sh/uv/) (recommended) or pip
 - An API key from a supported LLM provider (Anthropic, xAI, OpenAI)
 - (Optional) [Ollama](https://ollama.com) for local model support
 - (Optional) Brave Search API key for web search
 
 ## License
 
-MIT
+[AAAL](LICENSE) — Aaron Ackerman Arbitrary License
