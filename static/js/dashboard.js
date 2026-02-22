@@ -1260,18 +1260,37 @@ function renderTradingStatusCards(data) {
 
 function renderTradingChart(bars, meta) {
   const canvas = document.getElementById('tradingChart');
-  if (!canvas || !bars.length) return;
+  if (!canvas) return;
 
   const assetType = meta.asset_type || 'crypto';
   const symbol = meta.symbol || '—';
 
-  // Update chart header
+  // Always update chart header (even with no bars)
   const symbolEl = document.getElementById('chartSymbol');
   const timeframeEl = document.getElementById('chartTimeframe');
+  const priceEl = document.getElementById('chartPrice');
+  const changeEl = document.getElementById('chartChange');
   if (symbolEl) symbolEl.textContent = symbol.replace('/', ' / ');
   if (timeframeEl) timeframeEl.textContent = assetType === 'stock' ? '5m bars' : '1m bars';
 
   const ctx = canvas.getContext('2d');
+
+  // No bars — clear canvas and show message
+  if (!bars.length) {
+    const dpr = window.devicePixelRatio || 1;
+    const rect = canvas.getBoundingClientRect();
+    canvas.width = rect.width * dpr;
+    canvas.height = rect.height * dpr;
+    ctx.scale(dpr, dpr);
+    ctx.clearRect(0, 0, rect.width, rect.height);
+    ctx.fillStyle = '#555';
+    ctx.font = '12px JetBrains Mono, monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('Market closed — waiting for data', rect.width / 2, rect.height / 2);
+    if (priceEl) priceEl.textContent = '—';
+    if (changeEl) { changeEl.textContent = ''; changeEl.className = 'chart-change'; }
+    return;
+  }
   const dpr = window.devicePixelRatio || 1;
 
   const rect = canvas.getBoundingClientRect();
@@ -1380,9 +1399,7 @@ function renderTradingChart(bars, meta) {
     ctx.fillText(`${hh}:${mm}`, x, H - 6);
   }
 
-  // Update header price
-  const priceEl = document.getElementById('chartPrice');
-  const changeEl = document.getElementById('chartChange');
+  // Update header price (priceEl/changeEl declared at top of function)
   if (priceEl) priceEl.textContent = fmtUSD(lastClose);
 
   if (changeEl && bars.length > 1) {

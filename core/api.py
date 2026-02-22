@@ -1379,7 +1379,9 @@ def create_app() -> FastAPI:
         agents = []
         for name in cfg.get("agents", {}):
             strategy_file = config.PROJECT_ROOT / "workspaces" / name / "bot" / "strategy_config.json"
-            if strategy_file.exists():
+            run_script = config.PROJECT_ROOT / "workspaces" / name / "bot" / "run"
+            # Must have both strategy config AND the bot run script (not just a stray config file)
+            if strategy_file.exists() and run_script.exists():
                 try:
                     strategy = _json.loads(strategy_file.read_text())
                     asset_type = strategy.get("asset_type", "crypto")
@@ -1501,8 +1503,14 @@ def create_app() -> FastAPI:
                         bar_start = since
                         bar_limit = "60"
                     else:
-                        bar_start = (_dt.now(_tz.utc) - _td(hours=7, minutes=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
-                        bar_limit = "430"
+                        if asset_type == "stock":
+                            # Stocks: look back up to 4 days to cover weekends + holidays
+                            # On Sat/Sun this fetches Friday's full session
+                            bar_start = (_dt.now(_tz.utc) - _td(days=4)).strftime("%Y-%m-%dT%H:%M:%SZ")
+                            bar_limit = "500"
+                        else:
+                            bar_start = (_dt.now(_tz.utc) - _td(hours=7, minutes=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+                            bar_limit = "430"
 
                     if asset_type == "stock":
                         # Stock bars: /v2/stocks/{SYMBOL}/bars
