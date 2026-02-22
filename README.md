@@ -1,7 +1,8 @@
 # Alfred AI
 
 ![Python](https://img.shields.io/badge/python-3.10+-blue.svg)
-![License: AAAL](https://img.shields.io/badge/license-AAAL-purple.svg)
+![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
+![uv](https://img.shields.io/badge/uv-package%20manager-orange.svg)
 
 A memory-first agent framework in Python. Create AI agents that remember, learn, and act — with built-in Discord integration, cost tracking, and autonomous process management.
 
@@ -31,21 +32,20 @@ cd Alfred-Ai
 uv sync                          # Creates venv + installs all dependencies
 uv sync --extra trading          # Include trading bot dependencies (optional)
 
-# Symlink the CLI (optional, for global access)
-sudo ln -sf "$(pwd)/alfred" /usr/local/bin/alfred
-
 # Run the setup wizard
-./alfred setup
+uv run alfred setup
 
 # Connect to Discord
-./alfred discord setup
+uv run alfred discord setup
 
 # Start Alfred
-./alfred start
+uv run alfred start
 ```
 
 > **Don't have uv?** Install it with `curl -LsSf https://astral.sh/uv/install.sh | sh`
 > or see [docs.astral.sh/uv](https://docs.astral.sh/uv/getting-started/installation/).
+>
+> **Want a global `alfred` command?** Run `sudo ln -sf "$(pwd)/alfred" /usr/local/bin/alfred`
 
 The setup wizard walks you through:
 1. Configuring your LLM provider and API key
@@ -179,14 +179,14 @@ Five entry points (CLI, Discord, REST API, Web Dashboard, Scheduler) feed into t
             │ PID mgmt                  │
    ┌────────▼────────────┐              │
    │  AUTONOMOUS PROCESS │              │
-   │  BTC Trading Bot    │              │
-   │  BB + RSI strategy  │              │
+   │  Trading Bots       │              │
+   │  BTC · TSLA (VWAP+EMA)│           │
    └────────┬────────────┘              │
             │                           │
             │    ┌──────────────────────▼──────────────────────┐
             └───▶│         EXTERNAL SERVICES                   │
                  │                                             │
-                 │  Alpaca API    (paper trading, websocket)    │
+                 │  Alpaca API    (paper + live, websocket)     │
                  │  X/Twitter API (OAuth 1.0a)                 │
                  │  Brave Search  (web results)                │
                  │  LLM Providers (Anthropic · xAI · OpenAI · Ollama)│
@@ -207,6 +207,8 @@ Message in → smart auto-recall (relevance gating) → build system prompt
 
 ```
 alfred-ai/
+  pyproject.toml      Project config + dependencies (uv sync)
+  uv.lock             Locked dependency versions
   alfred              CLI launcher (bash wrapper)
   __main__.py         CLI entry point — all commands route through here
   core/
@@ -525,4 +527,4 @@ Built with the help of:
 
 ## License
 
-[AAAL](LICENSE) — Aaron Ackerman Arbitrary License
+[MIT](LICENSE)

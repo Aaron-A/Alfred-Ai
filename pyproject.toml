@@ -3,7 +3,7 @@ name = "alfred-ai"
 version = "0.1.0"
 description = "Memory-first AI agent framework with persistent agents, autonomous processes, and a real-time dashboard."
 readme = "README.md"
-license = {text = "AAAL"}
+license = {text = "MIT"}
 requires-python = ">=3.10"
 authors = [
     {name = "Aaron Ackerman"},

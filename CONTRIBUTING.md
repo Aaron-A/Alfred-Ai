@@ -8,14 +8,14 @@ Thanks for your interest in contributing! Here's how to get started.
 git clone https://github.com/Aaron-A/Alfred-Ai.git
 cd Alfred-Ai
 uv sync --all-extras
-./alfred setup
+uv run alfred setup
 ```
 
 ## Development Workflow
 
 1. Create a feature branch: `git checkout -b feature/your-feature`
 2. Make your changes
-3. Test locally: `./alfred start --fg`
+3. Test locally: `uv run alfred start --fg`
 4. Commit with a clear message describing the *why*, not just the *what*
 5. Push and open a pull request
 
@@ -53,4 +53,4 @@ Open an issue with:
 
 ## License
 
-By contributing, you agree to the [AAAL](LICENSE) — Aaron Ackerman Arbitrary License. Aaron's mood may vary.
+By contributing, you agree to the [MIT License](LICENSE).
