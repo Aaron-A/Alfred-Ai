@@ -62,6 +62,7 @@ Commands:
     start --fg                          Start in foreground (Ctrl+C to stop)
     start --port 8080                   Start with API on custom port
     stop                                Stop all services
+    restart                             Stop then start all services
     status                              Show configuration and running state
     logs                                Tail the log file
 
@@ -114,6 +115,7 @@ Examples:
     alfred start                                    # Start all services (API, scheduler, Discord)
     alfred start --fg                               # Start in foreground (Ctrl+C to stop)
     alfred stop                                     # Stop all services
+    alfred restart                                  # Restart all services
     alfred status                                   # Check what's running
     alfred logs                                     # Watch the log
     alfred provider add anthropic                   # Add Claude as a provider
@@ -3126,6 +3128,23 @@ def main():
     # Handle 'stop' command
     if command == "stop":
         cmd_stop()
+        return
+
+    # Handle 'restart' command
+    if command == "restart":
+        cmd_stop()
+        import time as _time
+        _time.sleep(1)
+        foreground = "--fg" in sys.argv[2:] or "--foreground" in sys.argv[2:]
+        port = 7700
+        args = sys.argv[2:]
+        for i, arg in enumerate(args):
+            if arg == "--port" and i + 1 < len(args):
+                try:
+                    port = int(args[i + 1])
+                except ValueError:
+                    pass
+        cmd_start(foreground=foreground, port=port)
         return
 
     # Handle 'logs' command
