@@ -508,6 +508,21 @@ Ollama runs on `localhost:11434` using OpenAI-compatible APIs. Supported models 
 - (Optional) [Ollama](https://ollama.com) for local model support
 - (Optional) Brave Search API key for web search
 
+## Acknowledgments
+
+Built with the help of:
+
+- [Claude](https://claude.ai) by Anthropic — AI pair-programming and agent intelligence
+- [Grok](https://x.ai) by xAI — LLM provider with built-in web search
+- [LanceDB](https://lancedb.com) — embedded vector database powering agent memory
+- [Sentence Transformers](https://sbert.net) — local embedding models for semantic search
+- [FastAPI](https://fastapi.tiangolo.com) — async web framework for the REST API and dashboard
+- [Alpaca](https://alpaca.markets) — commission-free trading API for paper and live trading
+- [Ollama](https://ollama.com) — local LLM inference
+- [Discord.py](https://discordpy.readthedocs.io) — Discord bot framework
+- [Brave Search](https://brave.com/search/api/) — web search API
+- [uv](https://docs.astral.sh/uv/) — fast Python package manager by Astral
+
 ## License
 
 [AAAL](LICENSE) — Aaron Ackerman Arbitrary License
