@@ -13,6 +13,7 @@ dependencies = [
     # AI / LLM
     "anthropic>=0.40",
     "sentence-transformers>=3.0",
+    "einops>=0.7",
     "lancedb>=0.10",
 
     # Web framework

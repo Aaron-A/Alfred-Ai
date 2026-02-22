@@ -11,4 +11,9 @@ while [ -L "$SOURCE" ]; do
 done
 SCRIPT_DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
 
-exec "$SCRIPT_DIR/venv/bin/python3" "$SCRIPT_DIR/__main__.py" "$@"
+# Support both uv (.venv) and manual (venv) virtual environments
+if [ -f "$SCRIPT_DIR/.venv/bin/python3" ]; then
+    exec "$SCRIPT_DIR/.venv/bin/python3" "$SCRIPT_DIR/__main__.py" "$@"
+else
+    exec "$SCRIPT_DIR/venv/bin/python3" "$SCRIPT_DIR/__main__.py" "$@"
+fi
