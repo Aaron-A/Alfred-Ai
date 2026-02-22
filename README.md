@@ -139,70 +139,11 @@ Auto-refreshes every 10 seconds.
 
 Five entry points (CLI, Discord, REST API, Web Dashboard, Scheduler) feed into the Agent Framework. Each agent has its own workspace, tools, memory, and LLM provider. Tools auto-discover credentials from config. Memory is vector-searched on every interaction with smart relevance gating. The alerting system monitors error rates, costs, and crashes via Discord webhooks.
 
-```
-                     ┌──────────────────────────────────────────────────┐
-                     │                   ENTRY POINTS                   │
-                     │   CLI · Discord · API · Dashboard · Scheduler    │
-                     └────────────────────────┬─────────────────────────┘
-                                              │
-                     ┌────────────────────────▼────────────────────────┐
-                     │              AGENT FRAMEWORK                    │
-                     │                                                 │
-                     │  ┌─────────┐ ┌───────┐ ┌────────────┐          │
-                     │  │  Config  │ │  LLM  │ │   Memory   │          │
-                     │  │  (json)  │ │Client │ │  (LanceDB) │          │
-                     │  └────┬────┘ └───┬───┘ └─────┬──────┘          │
-                     │       │          │           │                  │
-                     │  credentials  provider    vectors               │
-                     │  auto-inject  fallback    hybrid search         │
-                     │                           importance scoring    │
-                     │  ┌────────────┐  ┌──────────┐                  │
-                     │  │  Alerting  │  │ Metrics  │                  │
-                     │  │ (webhooks) │  │  (cost)  │                  │
-                     │  └────────────┘  └──────────┘                  │
-                     └──────────────────┬──────────────────────────────┘
-                                        │
-              ┌─────────────────────────┼─────────────────────────┐
-              │                         │                         │
-   ┌──────────▼─────────┐  ┌───────────▼──────────┐  ┌──────────▼──────────┐
-   │      AGENTS         │  │       TOOLS           │  │     DATA STORES     │
-   │                     │  │                       │  │                     │
-   │  alfred   (Claude)  │  │  web_search           │  │  LanceDB  (vectors) │
-   │  trader   (Claude)  │  │  http_request (+auth) │  │  SQLite   (metrics) │
-   │  xmedia   (Claude)  │  │  x_api  (OAuth 1.0a)  │  │  Sessions (JSON)    │
-   │                     │  │  fetch_url · file_ops  │  │                     │
-   │  Each has:          │  │  calculator · datetime │  │                     │
-   │  SOUL.md  AGENTS.md │  │                       │  │                     │
-   │  USER.md  TOOLS.md  │  │  memory_search/store  │  │                     │
-   │  memory/  tools/    │  │  memory_update/link   │  │                     │
-   │                     │  │  delegate_to          │  │                     │
-   │                     │  │  send_message         │  │                     │
-   └────────┬────────────┘  │  switch_model         │  └─────────────────────┘
-            │               └───────────┬───────────┘
-            │ PID mgmt                  │
-   ┌────────▼────────────┐              │
-   │  AUTONOMOUS PROCESS │              │
-   │  Trading Bots       │              │
-   │  BTC · TSLA (VWAP+EMA)│           │
-   └────────┬────────────┘              │
-            │                           │
-            │    ┌──────────────────────▼──────────────────────┐
-            └───▶│         EXTERNAL SERVICES                   │
-                 │                                             │
-                 │  Alpaca API    (paper + live, websocket)     │
-                 │  X/Twitter API (OAuth 1.0a)                 │
-                 │  Brave Search  (web results)                │
-                 │  LLM Providers (Anthropic · xAI · OpenAI · Ollama)│
-                 └─────────────────────────────────────────────┘
-```
+![System Overview](images/alfredarch.png)
 
 **Agent execution flow:**
 
-```
-Message in → smart auto-recall (relevance gating) → build system prompt
-  → LLM call → tool loop (execute → auto-retry → summarize → feed back)
-  → save session → cost tracking → alerting → optional reflection → respond
-```
+![Agent Execution Flow](images/agentflow.png)
 
 > **Interactive diagram:** Start Alfred and visit [`localhost:7700/architecture`](http://localhost:7700/architecture) for the full visual version with clickable nodes and detail panels.
 
