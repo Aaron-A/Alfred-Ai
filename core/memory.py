@@ -61,6 +61,30 @@ class MemoryStore:
         # Fallback: try to coerce
         return list(result)
 
+    def _migrate_table_schema(self, table, table_name: str):
+        """
+        Add missing columns to an existing LanceDB table.
+
+        When MemoryRecord gains new fields (e.g. importance, linked_ids),
+        existing tables won't have those columns. This adds them with
+        defaults so writes don't fail with 'Field not found in target schema'.
+        """
+        schema_names = {f.name for f in table.schema}
+
+        # Define expected columns with their SQL default expressions
+        expected = {
+            "importance": "0.5",
+            "linked_ids": "''",
+        }
+
+        for col, default_expr in expected.items():
+            if col not in schema_names:
+                try:
+                    table.add_columns({col: default_expr})
+                    logger.info(f"Migrated {table_name}: added column '{col}'")
+                except Exception as e:
+                    logger.warning(f"Failed to add column '{col}' to {table_name}: {e}")
+
     def _get_or_create_table(self, data: list[dict]) -> lancedb.table.Table:
         """Get existing table or create one from data."""
         # Infer memory_type from the first record
@@ -74,6 +98,7 @@ class MemoryStore:
 
         if table_name in existing_tables:
             table = self.db.open_table(table_name)
+            self._migrate_table_schema(table, table_name)
             self._tables[table_name] = table
             return table, False
         else:
@@ -309,6 +334,7 @@ class MemoryStore:
         for table_name in table_names:
             try:
                 table = self.db.open_table(table_name)
+                self._migrate_table_schema(table, table_name)
 
                 # Try hybrid search first if enabled
                 if use_hybrid and self._ensure_fts_index(table, table_name):
@@ -542,6 +568,7 @@ class MemoryStore:
         for table_name in table_names:
             try:
                 table = self.db.open_table(table_name)
+                self._migrate_table_schema(table, table_name)
 
                 # Find records that are old AND low importance
                 # LanceDB where clause format
