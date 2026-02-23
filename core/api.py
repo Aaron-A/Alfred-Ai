@@ -502,6 +502,30 @@ def create_app() -> FastAPI:
         running = scheduler.is_schedule_running(schedule_id) if scheduler else False
         return {"agent": name, "schedule_id": schedule_id, "running": running}
 
+    @app.patch("/v1/agents/{name}/schedules/{schedule_id}")
+    async def toggle_schedule_endpoint(name: str, schedule_id: str, body: dict):
+        """Toggle a schedule's enabled state (pause/resume)."""
+        from .scheduler import toggle_schedule
+        enabled = body.get("enabled")
+        if enabled is None:
+            raise HTTPException(status_code=400, detail="Missing 'enabled' field")
+        ok = toggle_schedule(name, schedule_id, bool(enabled))
+        if not ok:
+            raise HTTPException(status_code=404, detail=f"Schedule '{schedule_id}' not found")
+        action = "enabled" if enabled else "disabled"
+        logger.info(f"Schedule '{schedule_id}' for agent '{name}' {action} via API")
+        return {"message": f"Schedule '{schedule_id}' {action}"}
+
+    @app.delete("/v1/agents/{name}/schedules/{schedule_id}")
+    async def delete_schedule_endpoint(name: str, schedule_id: str):
+        """Permanently delete a schedule."""
+        from .scheduler import remove_schedule
+        ok = remove_schedule(name, schedule_id)
+        if not ok:
+            raise HTTPException(status_code=404, detail=f"Schedule '{schedule_id}' not found")
+        logger.info(f"Schedule '{schedule_id}' deleted from agent '{name}' via API")
+        return {"message": f"Schedule '{schedule_id}' deleted"}
+
     # ─── Sessions ────────────────────────────────────────
 
     @app.get("/v1/sessions/{agent_name}")
@@ -683,9 +707,10 @@ def create_app() -> FastAPI:
         and average relevance scores.
         """
         import sqlite3
-        from .metrics_store import _PERIOD_OFFSETS
+        from .metrics_store import _PERIOD_OFFSETS, MetricsStore
 
         offset = _PERIOD_OFFSETS.get(period, _PERIOD_OFFSETS["day"])
+        cutoff = MetricsStore._compute_cutoff(datetime.now(config.tz), offset)
         db_path = config.DATA_DIR / "metrics.db"
 
         try:
@@ -695,16 +720,16 @@ def create_app() -> FastAPI:
             if agent:
                 rows = conn.execute(
                     """SELECT * FROM vector_queries
-                       WHERE timestamp >= datetime('now', ?) AND agent = ?
+                       WHERE timestamp >= ? AND agent = ?
                        ORDER BY timestamp DESC LIMIT ?""",
-                    (offset, agent, limit),
+                    (cutoff, agent, limit),
                 ).fetchall()
             else:
                 rows = conn.execute(
                     """SELECT * FROM vector_queries
-                       WHERE timestamp >= datetime('now', ?)
+                       WHERE timestamp >= ?
                        ORDER BY timestamp DESC LIMIT ?""",
-                    (offset, limit),
+                    (cutoff, limit),
                 ).fetchall()
 
             conn.close()

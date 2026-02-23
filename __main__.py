@@ -1055,7 +1055,8 @@ def cmd_agent_schedule_run(name: str, schedule_id: str):
 
         agent_config = AgentConfig.from_dict(agent_data)
         agent = Agent(agent_config, session_id="schedule")
-        return agent.run(task)
+        ctx = {"structured": True} if agent_config.schedule_run_mode == "structured" else None
+        return agent.run(task, context=ctx)
 
     try:
         result = run_schedule_now(name, schedule_id, agent_runner=_runner)
@@ -2632,7 +2633,9 @@ def cmd_start(foreground: bool = False, _daemon_child: bool = False, port: int =
             # history just wastes context window and can cause token
             # overflow on multi-tool runs.
             agent.history = []
-            result = agent.run(task)
+            # Use structured mode (no tool_use, 2 LLM calls) if configured
+            ctx = {"structured": True} if agent_config.schedule_run_mode == "structured" else None
+            result = agent.run(task, context=ctx)
 
             # Post the agent's response to its mapped Discord channel
             if _discord_bot[0] and result:

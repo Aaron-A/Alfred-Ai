@@ -16,7 +16,8 @@
     <span class="subtitle">Agent Framework</span>
   </div>
   <div class="header-right">
-    <a href="/architecture" style="font-size:11px;color:#888;text-decoration:none;letter-spacing:1px;margin-right:16px;transition:color 0.15s;" onmouseover="this.style.color='#06b6d4'" onmouseout="this.style.color='#888'">Architecture</a>
+    <a href="/architecture" style="font-size:11px;color:var(--text-muted);text-decoration:none;letter-spacing:1px;margin-right:16px;transition:color 0.15s;" onmouseover="this.style.color='#06b6d4'" onmouseout="this.style.color=''">Architecture</a>
+    <button class="theme-toggle" onclick="toggleTheme()" title="Toggle light/dark theme"><span id="themeIcon">☀</span></button>
     <button class="header-restart-btn" id="headerRestartBtn" onclick="headerRestart()">RESTART</button>
     <span class="refresh-info" id="refreshInfo"></span>
     <div class="status-indicator" id="statusIndicator">
@@ -108,7 +109,7 @@
           <th>Runs</th>
           <th>Last Run</th>
           <th>Next Run</th>
-          <th></th>
+          <th>Actions</th>
         </tr>
       </thead>
       <tbody id="schedulesBody">
@@ -356,6 +357,21 @@
     <div class="modal-actions">
       <button class="modal-btn modal-btn--dismiss" onclick="closeCreateAgentModal()">CANCEL</button>
       <button class="modal-btn modal-btn--save" id="createAgentBtn" disabled onclick="createAgent()">CREATE</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═════════ DELETE SCHEDULE MODAL ═════════ -->
+<div class="modal-overlay" id="deleteScheduleModal">
+  <div class="modal-box">
+    <div class="modal-header">
+      <span class="modal-title" id="deleteScheduleTitle">Delete Schedule</span>
+      <button class="modal-close" onclick="closeDeleteScheduleModal()">&times;</button>
+    </div>
+    <p class="modal-warning" id="deleteScheduleWarning">This will permanently remove this schedule. This cannot be undone.</p>
+    <div class="modal-actions">
+      <button class="modal-btn modal-btn--dismiss" onclick="closeDeleteScheduleModal()">CANCEL</button>
+      <button class="modal-btn modal-btn--danger modal-btn--danger-active" id="deleteScheduleBtn" onclick="confirmDeleteSchedule()">DELETE</button>
     </div>
   </div>
 </div>

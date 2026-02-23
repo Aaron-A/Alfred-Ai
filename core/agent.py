@@ -106,6 +106,9 @@ class AgentConfig:
     context_reserve_tokens: int = 4096  # Always keep free for model's response
     schedule_max_tool_rounds: int = 15  # Separate (lower) cap for scheduled runs
 
+    # Scheduled run mode — "tool_use" (default) or "structured" (no tool schemas, JSON output)
+    schedule_run_mode: str = "tool_use"
+
     # Template — which archetype was used to create this agent
     template: str = ""
 
@@ -783,7 +786,8 @@ class Agent:
                               "check_inbox", "send_message", "delegate_to",
                               "switch_model", "tool_list", "tool_search",
                               "x_search_tweets", "x_api", "x_get_metrics",
-                              "http_request", "trading_bot"}
+                              "http_request", "trading_bot",
+                              "schedule_manage"}
 
     def _maybe_summarize_tool_result(self, tool_name: str, result: str) -> str:
         """
@@ -1279,7 +1283,11 @@ class Agent:
             # Step 4: Run the LLM loop (may involve multiple tool calls)
             # Returns (response_text, tool_call_count, input_tokens, output_tokens, new_messages)
             # new_messages contains the FULL chain: user → [assistant+tool_use → tool_result]* → final assistant
-            if self.llm.provider == "anthropic":
+            if context and context.get("structured"):
+                # Structured mode: 2 LLM calls, no tool_use, no tool schemas
+                response, tool_call_count, input_tokens, output_tokens, new_messages = \
+                    self._run_structured(message, full_system)
+            elif self.llm.provider == "anthropic":
                 response, tool_call_count, input_tokens, output_tokens, new_messages = \
                     self._run_anthropic_loop(message, full_system, available_tools)
             else:
@@ -1416,6 +1424,183 @@ class Agent:
         except Exception as e:
             logger.debug(f"{self.config.name}: reflection failed (non-fatal): {e}")
 
+    # ─── Structured Execution (no tool_use) ────────────────────
+
+    _STRUCTURED_GATHER_PROMPT = (
+        "\n\n## Response Format (STRICT)\n"
+        "Respond ONLY with valid JSON. No markdown fences, no commentary.\n\n"
+        "Return a JSON object with tools to call for gathering context:\n"
+        '{"gather": [{"tool": "tool_name", "params": {"key": "value"}}]}\n\n'
+        "Only include tools you actually need. Refer to the TOOLS section above for "
+        "available tool names and their parameters. If no gathering is needed and you "
+        "can compose actions directly, return:\n"
+        '{"gather": []}\n'
+    )
+
+    _STRUCTURED_ACTION_PROMPT = (
+        "\n\n## Response Format (STRICT)\n"
+        "Respond ONLY with valid JSON. No markdown fences, no commentary.\n\n"
+        "Return a JSON object with actions to execute and a brief summary:\n"
+        '{"actions": [{"tool": "tool_name", "params": {"key": "value"}}], '
+        '"summary": "Brief description of what you did and why"}\n\n'
+        "Refer to the TOOLS section above for available tool names and parameters.\n"
+        "Include a memory_store action to log what you did.\n"
+    )
+
+    def _run_structured(self, task: str, system: str) -> tuple[str, int, int, int, list[dict]]:
+        """
+        Two-phase structured execution — NO tool_use, NO tool schemas.
+
+        TOOLS.md (already in the system prompt) tells the LLM what tools exist.
+        The LLM outputs JSON with tool calls; Python executes them.
+
+        Phase 1 — GATHER: LLM outputs gather actions (searches, context lookups)
+        Phase 2 — EXECUTE GATHERS: Python runs them, collects results
+        Phase 3 — COMPOSE: LLM sees results, outputs final actions (post, like, store)
+        Phase 4 — EXECUTE ACTIONS: Python runs them
+
+        Returns same tuple as _run_anthropic_loop() for compatibility:
+            (response_text, tool_call_count, input_tokens, output_tokens, new_messages)
+        """
+        total_input = 0
+        total_output = 0
+        tool_call_count = 0
+        available = set(self._get_available_tools())
+
+        def _llm_call(sys: str, user_msg: str) -> tuple[str, int, int]:
+            """Single Anthropic call — no tools param, just text in/out."""
+            response = self.llm.anthropic_client.messages.create(
+                model=self.llm.model,
+                max_tokens=4096,
+                system=sys,
+                messages=[{"role": "user", "content": user_msg}],
+                temperature=self.config.temperature,
+            )
+            usage = getattr(response, "usage", None)
+            inp = getattr(usage, "input_tokens", 0) if usage else 0
+            out = getattr(usage, "output_tokens", 0) if usage else 0
+            text = "".join(b.text for b in response.content if hasattr(b, "text"))
+            return text, inp, out
+
+        def _parse_json(text: str) -> dict | None:
+            """Extract JSON from LLM response (handles markdown fences)."""
+            t = text.strip()
+            # Strip markdown code fences if present
+            if t.startswith("```"):
+                lines = t.split("\n")
+                lines = lines[1:]  # skip ```json
+                if lines and lines[-1].strip() == "```":
+                    lines = lines[:-1]
+                t = "\n".join(lines).strip()
+            try:
+                return json.loads(t)
+            except json.JSONDecodeError:
+                return None
+
+        def _execute_tools(tool_list: list[dict]) -> list[dict]:
+            """Execute a list of {"tool": name, "params": {}} dicts. Returns results."""
+            nonlocal tool_call_count
+            results = []
+            for item in tool_list:
+                name = item.get("tool", "")
+                params = item.get("params", {})
+                if name not in available:
+                    results.append({"tool": name, "error": f"Tool '{name}' not available"})
+                    logger.warning(f"{self.config.name}: structured: unknown tool '{name}'")
+                    continue
+                tool_call_count += 1
+                logger.info(f"{self.config.name}: structured: {name}({json.dumps(params)[:200]})")
+                tool_start = time.monotonic()
+                result = self._execute_tool_with_retry(name, params)
+                tool_ms = int((time.monotonic() - tool_start) * 1000)
+                logger.info(f"{self.config.name}: structured: {name} -> {tool_ms}ms ({len(result)} chars)")
+                results.append({"tool": name, "result": result[:4000]})  # cap result size
+            return results
+
+        # ── Phase 1: Gather Plan ──
+        gather_system = system + self._STRUCTURED_GATHER_PROMPT
+        logger.info(f"{self.config.name}: structured phase 1 — gather plan")
+        raw, inp, out = _llm_call(gather_system, task)
+        total_input += inp
+        total_output += out
+
+        parsed = _parse_json(raw)
+        if not parsed:
+            # Retry once on malformed JSON
+            logger.warning(f"{self.config.name}: structured: malformed gather JSON, retrying")
+            raw, inp, out = _llm_call(
+                gather_system,
+                f"{task}\n\nYour previous response was not valid JSON. Respond with ONLY valid JSON.",
+            )
+            total_input += inp
+            total_output += out
+            parsed = _parse_json(raw)
+
+        if not parsed:
+            logger.error(f"{self.config.name}: structured: failed to get valid JSON after retry")
+            return "Error: Could not parse structured response", 0, total_input, total_output, []
+
+        # ── Phase 2: Execute Gathers ──
+        gather_actions = parsed.get("gather", [])
+        gather_results = []
+        if gather_actions:
+            logger.info(f"{self.config.name}: structured phase 2 — executing {len(gather_actions)} gathers")
+            gather_results = _execute_tools(gather_actions)
+
+        # ── Phase 3: Compose Actions ──
+        action_system = system + self._STRUCTURED_ACTION_PROMPT
+
+        # Build context from gather results
+        context_parts = [task, "", "## Gathered Context"]
+        for gr in gather_results:
+            tool_name = gr["tool"]
+            if "error" in gr:
+                context_parts.append(f"### {tool_name}\nError: {gr['error']}")
+            else:
+                context_parts.append(f"### {tool_name}\n{gr['result']}")
+
+        logger.info(f"{self.config.name}: structured phase 3 — compose actions")
+        raw, inp, out = _llm_call(action_system, "\n".join(context_parts))
+        total_input += inp
+        total_output += out
+
+        parsed = _parse_json(raw)
+        if not parsed:
+            logger.warning(f"{self.config.name}: structured: malformed action JSON, retrying")
+            raw, inp, out = _llm_call(
+                action_system,
+                "\n".join(context_parts) + "\n\nYour previous response was not valid JSON. Respond with ONLY valid JSON.",
+            )
+            total_input += inp
+            total_output += out
+            parsed = _parse_json(raw)
+
+        if not parsed:
+            logger.error(f"{self.config.name}: structured: failed to get action JSON")
+            return "Error: Could not parse action response", tool_call_count, total_input, total_output, []
+
+        # ── Phase 4: Execute Actions ──
+        actions = parsed.get("actions", [])
+        summary = parsed.get("summary", "Structured run completed.")
+        if actions:
+            logger.info(f"{self.config.name}: structured phase 4 — executing {len(actions)} actions")
+            _execute_tools(actions)
+
+        logger.info(
+            f"{self.config.name}: structured run complete — "
+            f"{tool_call_count} tool calls, {total_input:,} in / {total_output:,} out tokens"
+        )
+
+        # Build minimal message history for persistence
+        new_messages = [
+            {"role": "user", "content": task},
+            {"role": "assistant", "content": summary},
+        ]
+
+        return summary, tool_call_count, total_input, total_output, new_messages
+
+    # ─── Tool-Use Loop (Anthropic Native) ────────────────────
+
     def _run_anthropic_loop(self, message: str, system: str, tool_names: list[str]) -> tuple[str, int, int, int, list[dict]]:
         """
         Agent loop using Anthropic's native tool_use API.
@@ -1456,15 +1641,24 @@ class Agent:
                     )
                     messages = self._compact_mid_run(messages, keep_recent=3)
 
+            # Prompt caching: system prompt + tool schemas are static across rounds.
+            # cache_control marks them for Anthropic's server-side prefix caching.
+            # Round 1 pays a 1.25x write cost; rounds 2+ read at 0.1x (90% discount).
+            system_blocks = [
+                {"type": "text", "text": system, "cache_control": {"type": "ephemeral"}}
+            ]
             kwargs = {
                 "model": self.llm.model,
                 "max_tokens": 4096,
-                "system": system,
+                "system": system_blocks,
                 "messages": messages,
                 "temperature": self.config.temperature,
             }
             if tools:
-                kwargs["tools"] = tools
+                # Cache all tool schemas by marking the last one
+                cached_tools = list(tools)
+                cached_tools[-1] = {**cached_tools[-1], "cache_control": {"type": "ephemeral"}}
+                kwargs["tools"] = cached_tools
 
             response = self.llm.anthropic_client.messages.create(**kwargs)
 
@@ -1473,6 +1667,14 @@ class Agent:
             if usage:
                 total_input_tokens += getattr(usage, "input_tokens", 0)
                 total_output_tokens += getattr(usage, "output_tokens", 0)
+                # Log cache metrics for cost tracking
+                cache_created = getattr(usage, "cache_creation_input_tokens", 0)
+                cache_read = getattr(usage, "cache_read_input_tokens", 0)
+                if cache_created or cache_read:
+                    logger.debug(
+                        f"{self.config.name}: prompt cache write={cache_created:,}, "
+                        f"read={cache_read:,} tokens"
+                    )
 
             # Check if the response contains tool calls
             if response.stop_reason == "tool_use":

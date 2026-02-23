@@ -6,6 +6,23 @@
 const API = '';  // Same origin
 const REFRESH_INTERVAL = 10000;  // 10 seconds
 
+// ─── Theme persistence ────────────────────────────
+const savedTheme = localStorage.getItem('alfred-theme');
+if (savedTheme === 'light') {
+  document.body.classList.add('light-theme');
+  document.addEventListener('DOMContentLoaded', () => {
+    const icon = document.getElementById('themeIcon');
+    if (icon) icon.textContent = '☾';
+  });
+}
+
+function toggleTheme() {
+  document.body.classList.toggle('light-theme');
+  const isLight = document.body.classList.contains('light-theme');
+  localStorage.setItem('alfred-theme', isLight ? 'light' : 'dark');
+  document.getElementById('themeIcon').textContent = isLight ? '☾' : '☀';
+}
+
 // ─── State ────────────────────────────────────────
 
 let state = {
@@ -316,7 +333,7 @@ function renderAgentsTable() {
 
     const cost = m.estimated_cost || 0;
     html += `<tr>
-      <td class="fw-600" style="color:#fff;">${escHtml(agent.name)}</td>
+      <td class="fw-600" style="color:var(--text);">${escHtml(agent.name)}</td>
       <td>${statusBadge(agent.status || 'active')}</td>
       <td><span class="text-dim">${escHtml(provider)}/${escHtml(modelShort)}</span> ${editBtn}${deleteBtn}</td>
       <td>${sessions.length || 0}</td>
@@ -880,8 +897,16 @@ function renderSchedulesTable() {
       runBtn = `<button class="run-btn" id="${runId}" onclick="runScheduleNow('${escHtml(s.agent_name)}','${escHtml(s.id)}')" title="Run now">&#9654;</button>`;
     }
 
+    // Pause/Resume button
+    const pauseBtn = s.enabled
+      ? `<button class="sched-btn sched-btn--pause" onclick="toggleSchedule('${escHtml(s.agent_name)}','${escHtml(s.id)}',false)" title="Pause">⏸</button>`
+      : `<button class="sched-btn sched-btn--resume" onclick="toggleSchedule('${escHtml(s.agent_name)}','${escHtml(s.id)}',true)" title="Resume">▶</button>`;
+
+    // Delete button
+    const delBtn = `<button class="sched-btn sched-btn--delete" onclick="deleteSchedule('${escHtml(s.agent_name)}','${escHtml(s.id)}')" title="Delete">✕</button>`;
+
     html += `<tr>
-      <td class="fw-600" style="color:#fff;">${escHtml(s.agent_name)}</td>
+      <td class="fw-600" style="color:var(--text);">${escHtml(s.agent_name)}</td>
       <td style="color:var(--cyan);">${escHtml(s.id)}</td>
       <td>${escHtml(s.human_schedule || s.cron)}</td>
       <td>${escHtml(task)}</td>
@@ -889,7 +914,7 @@ function renderSchedulesTable() {
       <td>${runsHtml}</td>
       <td>${lastRun}</td>
       <td>${nextRun}</td>
-      <td>${runBtn}</td>
+      <td><div class="sched-actions">${runBtn}${pauseBtn}${delBtn}</div></td>
     </tr>`;
   }
 
@@ -972,6 +997,53 @@ function _pollScheduleDone(agentName, scheduleId, btn) {
   }, 1000);
 }
 
+async function toggleSchedule(agentName, scheduleId, enabled) {
+  await patchJSON(`/v1/agents/${agentName}/schedules/${scheduleId}`, { enabled });
+  await refreshData();
+}
+
+let deleteScheduleTarget = { agent: '', id: '' };
+
+function deleteSchedule(agentName, scheduleId) {
+  deleteScheduleTarget = { agent: agentName, id: scheduleId };
+  const modal = document.getElementById('deleteScheduleModal');
+  document.getElementById('deleteScheduleTitle').textContent = `Delete "${scheduleId}"`;
+  document.getElementById('deleteScheduleWarning').textContent =
+    `This will permanently remove schedule "${scheduleId}" from ${agentName}. This cannot be undone.`;
+  const btn = document.getElementById('deleteScheduleBtn');
+  btn.textContent = 'DELETE';
+  btn.disabled = false;
+  btn.className = 'modal-btn modal-btn--danger modal-btn--danger-active';
+  modal.classList.add('active');
+}
+
+function closeDeleteScheduleModal() {
+  document.getElementById('deleteScheduleModal').classList.remove('active');
+  deleteScheduleTarget = { agent: '', id: '' };
+}
+
+async function confirmDeleteSchedule() {
+  const btn = document.getElementById('deleteScheduleBtn');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="btn-spinner"></span>DELETING...';
+  const { agent, id } = deleteScheduleTarget;
+  const result = await deleteJSON(`/v1/agents/${agent}/schedules/${id}`);
+  if (result && !result._error) {
+    btn.textContent = 'DELETED';
+    btn.className = 'modal-btn modal-btn--danger modal-btn--saved';
+    await refreshData();
+    setTimeout(() => closeDeleteScheduleModal(), 600);
+  } else {
+    btn.textContent = 'FAILED';
+    btn.className = 'modal-btn modal-btn--danger modal-btn--error';
+    setTimeout(() => {
+      btn.textContent = 'DELETE';
+      btn.disabled = false;
+      btn.className = 'modal-btn modal-btn--danger modal-btn--danger-active';
+    }, 2000);
+  }
+}
+
 // ─── Render: Metrics Cards ────────────────────────
 
 function renderMetricsCards() {
@@ -1047,7 +1119,7 @@ function renderModelsTable() {
     const cost = m.estimated_cost || 0;
     html += `<tr>
       <td style="color:var(--cyan);">${escHtml(provider)}</td>
-      <td class="fw-600" style="color:#fff;">${escHtml(modelShort)}</td>
+      <td class="fw-600" style="color:var(--text);">${escHtml(modelShort)}</td>
       <td>${fmtNum(m.messages || 0)}</td>
       <td>${fmtTokens(m.input_tokens || 0)}</td>
       <td>${fmtTokens(m.output_tokens || 0)}</td>
@@ -1345,7 +1417,7 @@ function renderTradingChart(bars, meta) {
     canvas.height = rect.height * dpr;
     ctx.scale(dpr, dpr);
     ctx.clearRect(0, 0, rect.width, rect.height);
-    ctx.fillStyle = '#555';
+    ctx.fillStyle = getComputedStyle(document.body).getPropertyValue('--text-dim').trim() || '#555';
     ctx.font = '12px JetBrains Mono, monospace';
     ctx.textAlign = 'center';
     ctx.fillText('Market closed — waiting for data', rect.width / 2, rect.height / 2);
@@ -1390,8 +1462,14 @@ function renderTradingChart(bars, meta) {
 
   ctx.clearRect(0, 0, W, H);
 
+  // Read theme colors for canvas
+  const cs = getComputedStyle(document.body);
+  const gridColor = cs.getPropertyValue('--border').trim() || '#1a1a1a';
+  const dimColor = cs.getPropertyValue('--text-dim').trim() || '#555';
+  const textColor = cs.getPropertyValue('--text').trim() || '#e5e5e5';
+
   // Grid lines
-  ctx.strokeStyle = '#1a1a1a';
+  ctx.strokeStyle = gridColor;
   ctx.lineWidth = 0.5;
   const gridCount = 5;
   for (let i = 0; i <= gridCount; i++) {
@@ -1402,7 +1480,7 @@ function renderTradingChart(bars, meta) {
     ctx.stroke();
 
     const price = pMax - (i / gridCount) * (pMax - pMin);
-    ctx.fillStyle = '#555';
+    ctx.fillStyle = dimColor;
     ctx.font = '9px JetBrains Mono, monospace';
     ctx.textAlign = 'right';
     ctx.fillText(price.toLocaleString('en-US', priceFmt), PAD_LEFT - 8, y + 3);
@@ -1433,7 +1511,7 @@ function renderTradingChart(bars, meta) {
   // Current price line
   const lastClose = closes[closes.length - 1];
   const lastY = priceToY(lastClose);
-  ctx.strokeStyle = '#fff';
+  ctx.strokeStyle = textColor;
   ctx.lineWidth = 0.5;
   ctx.setLineDash([4, 4]);
   ctx.beginPath();
@@ -1442,13 +1520,13 @@ function renderTradingChart(bars, meta) {
   ctx.stroke();
   ctx.setLineDash([]);
 
-  ctx.fillStyle = '#fff';
+  ctx.fillStyle = textColor;
   ctx.font = 'bold 10px JetBrains Mono, monospace';
   ctx.textAlign = 'left';
   ctx.fillText(lastClose.toLocaleString('en-US', priceFmt), W - PAD_RIGHT + 4, lastY + 3);
 
   // Time labels
-  ctx.fillStyle = '#555';
+  ctx.fillStyle = dimColor;
   ctx.font = '8px JetBrains Mono, monospace';
   ctx.textAlign = 'center';
   const labelInterval = Math.max(Math.floor(bars.length / 6), 1);
@@ -1642,6 +1720,13 @@ document.addEventListener('DOMContentLoaded', () => {
   if (deleteModal) {
     deleteModal.addEventListener('click', (e) => {
       if (e.target === deleteModal) closeDeleteAgentModal();
+    });
+  }
+
+  const deleteSchedModal = document.getElementById('deleteScheduleModal');
+  if (deleteSchedModal) {
+    deleteSchedModal.addEventListener('click', (e) => {
+      if (e.target === deleteSchedModal) closeDeleteScheduleModal();
     });
   }
 

@@ -871,3 +871,93 @@ def register_builtin_tools(registry: ToolRegistry, agent_id: str = None,
         ],
         category="agents",
     )
+
+    # ─── Schedule Management Tool ─────────────────────────────
+
+    def schedule_manage(action: str, schedule_id: str = None,
+                        cron: str = None, task: str = None) -> str:
+        """Manage this agent's own schedules."""
+        from .scheduler import get_agent_schedules, toggle_schedule, add_schedule, remove_schedule
+        from .config import _load_config, _save_config
+
+        agent = agent_id
+        if not agent:
+            return "Error: schedule_manage requires agent context."
+
+        if action == "list":
+            schedules = get_agent_schedules(agent)
+            if not schedules:
+                return "No schedules found."
+            lines = []
+            for s in schedules:
+                status = "ON " if s.enabled else "OFF"
+                lines.append(f"[{status}] {s.id} | {s.cron} | {s.task[:100]}...")
+            return "\n".join(lines)
+
+        elif action == "enable":
+            if not schedule_id:
+                return "Error: schedule_id required."
+            ok = toggle_schedule(agent, schedule_id, True)
+            return f"Enabled '{schedule_id}'." if ok else f"Schedule '{schedule_id}' not found."
+
+        elif action == "disable":
+            if not schedule_id:
+                return "Error: schedule_id required."
+            ok = toggle_schedule(agent, schedule_id, False)
+            return f"Disabled '{schedule_id}'." if ok else f"Schedule '{schedule_id}' not found."
+
+        elif action == "update":
+            if not schedule_id:
+                return "Error: schedule_id required."
+            if not cron and not task:
+                return "Error: provide cron and/or task to update."
+            cfg = _load_config()
+            for s in cfg.get("agents", {}).get(agent, {}).get("schedules", []):
+                if s.get("id") == schedule_id:
+                    old_cron = s.get("cron", "")
+                    old_task_preview = s.get("task", "")[:60]
+                    if cron:
+                        s["cron"] = cron
+                    if task:
+                        s["task"] = task
+                    _save_config(cfg)
+                    parts = []
+                    if cron:
+                        parts.append(f"cron: '{old_cron}' → '{cron}'")
+                    if task:
+                        parts.append(f"task updated ({len(task)} chars)")
+                    return f"Updated '{schedule_id}': {', '.join(parts)}"
+            return f"Schedule '{schedule_id}' not found."
+
+        elif action == "create":
+            if not cron or not task:
+                return "Error: both cron and task are required to create a schedule."
+            new = add_schedule(agent, cron, task)
+            return f"Created schedule '{new.id}' | cron: '{cron}' | task: {task[:80]}..."
+
+        elif action == "delete":
+            if not schedule_id:
+                return "Error: schedule_id required."
+            ok = remove_schedule(agent, schedule_id)
+            return f"Deleted '{schedule_id}'." if ok else f"Schedule '{schedule_id}' not found."
+
+        else:
+            return f"Unknown action '{action}'. Use: list, enable, disable, update, create, delete"
+
+    registry.register_function(
+        name="schedule_manage",
+        description=(
+            "Manage your own schedules — list, enable/disable, update, create, or delete. "
+            "Use 'list' first to see schedule IDs. Each schedule has a cron expression "
+            "(e.g. '0 9 * * *' = 9am daily, '0 9 * * 1-5' = 9am weekdays) and a task prompt."
+        ),
+        fn=schedule_manage,
+        parameters=[
+            ToolParameter("action", "string", "Action to perform",
+                          enum=["list", "enable", "disable", "update", "create", "delete"]),
+            ToolParameter("schedule_id", "string", "Schedule ID (from 'list' action)", required=False),
+            ToolParameter("cron", "string", "Cron expression, e.g. '0 9 * * 1-5' for 9am weekdays", required=False),
+            ToolParameter("task", "string", "Task prompt for the schedule", required=False),
+        ],
+        category="system",
+    )

@@ -149,8 +149,8 @@ def check_error_alert(agent: str, error: str):
             cursor = conn.execute(
                 """SELECT COUNT(*) FROM events
                    WHERE is_error = 1 AND agent = ?
-                   AND timestamp >= datetime('now', ?)""",
-                (agent, f"-{window} minutes"),
+                   AND timestamp >= ?""",
+                (agent, (datetime.now(config.tz) - timedelta(minutes=window)).strftime("%Y-%m-%d %H:%M:%S")),
             )
             count = cursor.fetchone()[0]
             conn.close()
@@ -194,7 +194,8 @@ def check_cost_alert():
             conn = sqlite3.connect(str(db_path))
             cursor = conn.execute(
                 """SELECT COALESCE(SUM(estimated_cost), 0) FROM events
-                   WHERE timestamp >= datetime('now', '-1 day')""",
+                   WHERE timestamp >= ?""",
+                ((datetime.now(config.tz) - timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S"),),
             )
             total_cost = cursor.fetchone()[0]
             conn.close()

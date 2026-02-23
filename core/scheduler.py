@@ -675,9 +675,11 @@ class Scheduler:
                 db_path = config.DATA_DIR / "metrics.db"
                 if db_path.exists():
                     conn = sqlite3.connect(str(db_path))
+                    from datetime import datetime as _dt, timedelta as _td
+                    cutoff = (_dt.now(config.tz) - _td(days=metrics_max_age)).strftime("%Y-%m-%d %H:%M:%S")
                     cursor = conn.execute(
-                        "DELETE FROM events WHERE timestamp < datetime('now', ?)",
-                        (f"-{metrics_max_age} days",),
+                        "DELETE FROM events WHERE timestamp < ?",
+                        (cutoff,),
                     )
                     deleted = cursor.rowcount
                     conn.commit()

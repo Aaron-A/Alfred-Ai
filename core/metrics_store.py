@@ -8,14 +8,14 @@ Storage: data/metrics.db (~200 bytes/event, ~26 MB/year at 1000 msgs/day)
 """
 
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from .config import Config
+from .config import Config, config
 
 DB_PATH = Config.DATA_DIR / "metrics.db"
 
-# Time offsets for SQLite datetime() function
+# Period offsets — parsed by _compute_cutoff() into Python timedeltas
 _PERIOD_OFFSETS = {
     "5m": "-5 minutes",
     "15m": "-15 minutes",
@@ -41,7 +41,7 @@ SELECT
     SUM(COALESCE(estimated_cost, 0)) as total_cost,
     MAX(timestamp) as last_activity
 FROM events
-WHERE timestamp >= datetime('now', ?)
+WHERE timestamp >= ?
 {agent_filter}
 GROUP BY agent
 ORDER BY agent
@@ -59,7 +59,7 @@ SELECT
     SUM(COALESCE(estimated_cost, 0)) as total_cost,
     MAX(timestamp) as last_activity
 FROM events
-WHERE timestamp >= datetime('now', ?)
+WHERE timestamp >= ?
   AND provider != '' AND model != ''
 {agent_filter}
 GROUP BY provider, model
@@ -167,11 +167,29 @@ class MetricsStore:
                 except Exception:
                     pass
 
+    @staticmethod
+    def _compute_cutoff(now: datetime, offset: str) -> str:
+        """Convert offset like '-7 days' to a cutoff timestamp string."""
+        parts = offset.strip().split()
+        val = abs(int(parts[0]))
+        unit = parts[1].rstrip("s")  # 'days' -> 'day'
+        if unit == "minute":
+            td = timedelta(minutes=val)
+        elif unit == "hour":
+            td = timedelta(hours=val)
+        elif unit == "day":
+            td = timedelta(days=val)
+        elif unit == "year":
+            td = timedelta(days=val * 365)
+        else:
+            td = timedelta(days=val)
+        return (now - td).strftime("%Y-%m-%d %H:%M:%S")
+
     def record(self, agent: str, provider: str, model: str,
                elapsed_ms: int, tool_calls: int,
                input_tokens: int, output_tokens: int):
         """Record a successful agent interaction with estimated cost."""
-        now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        now = datetime.now(config.tz).strftime("%Y-%m-%d %H:%M:%S")
         cost = self._estimate_cost(model or "", input_tokens, output_tokens)
         try:
             with self._conn() as conn:
@@ -188,7 +206,7 @@ class MetricsStore:
 
     def record_error(self, agent: str, provider: str, model: str, error: str):
         """Record an agent error event."""
-        now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+        now = datetime.now(config.tz).strftime("%Y-%m-%d %H:%M:%S")
         try:
             with self._conn() as conn:
                 conn.execute(
@@ -219,9 +237,10 @@ class MetricsStore:
             }
         """
         offset = _PERIOD_OFFSETS.get(period, _PERIOD_OFFSETS["day"])
+        cutoff = self._compute_cutoff(datetime.now(config.tz), offset)
         agent_filter = "AND agent = ?" if agent else ""
 
-        params_base = [offset]
+        params_base = [cutoff]
         if agent:
             params_base.append(agent)
 
@@ -270,7 +289,7 @@ class MetricsStore:
             pass  # Return empty on error
 
         return {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(config.tz).isoformat(),
             "period": period,
             "agents": agents_result,
             "models": models_result,
