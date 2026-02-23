@@ -75,6 +75,49 @@ def _send_discord_alert(webhook_url: str, title: str, description: str, color: i
         logger.warning(f"Failed to send alert: {e}")
 
 
+def _send_generic_webhook(webhook_url: str, title: str, description: str, level: str = "error"):
+    """Send an alert to a generic webhook (Slack, custom HTTP endpoint, etc.)."""
+    if not webhook_url:
+        return
+
+    payload = json.dumps({
+        "title": title,
+        "description": description,
+        "level": level,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "source": "alfred-ai",
+    }).encode("utf-8")
+
+    req = urllib.request.Request(
+        webhook_url,
+        data=payload,
+        headers={"Content-Type": "application/json", "User-Agent": "Alfred-AI/1.0"},
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            pass
+        logger.info(f"Webhook alert sent: {title}")
+    except Exception as e:
+        logger.warning(f"Failed to send webhook alert: {e}")
+
+
+def _send_alert(title: str, description: str, color: int = 0xFF4444, level: str = "error"):
+    """Send alert to all configured channels (Discord + generic webhook)."""
+    alert_cfg = _get_alert_config()
+    if not alert_cfg:
+        return
+
+    discord_webhook = alert_cfg.get("discord_webhook", "")
+    if discord_webhook:
+        _send_discord_alert(discord_webhook, title, description, color)
+
+    generic_webhook = alert_cfg.get("webhook_url", "")
+    if generic_webhook:
+        _send_generic_webhook(generic_webhook, title, description, level)
+
+
 def check_error_alert(agent: str, error: str):
     """
     Check if error rate exceeds threshold and fire alert if needed.
@@ -84,10 +127,6 @@ def check_error_alert(agent: str, error: str):
     """
     alert_cfg = _get_alert_config()
     if not alert_cfg:
-        return
-
-    webhook = alert_cfg.get("discord_webhook", "")
-    if not webhook:
         return
 
     cooldown = alert_cfg.get("cooldown_minutes", 60)
@@ -118,8 +157,7 @@ def check_error_alert(agent: str, error: str):
 
             if count >= threshold:
                 _last_fired["error_rate"] = datetime.now(timezone.utc)
-                _send_discord_alert(
-                    webhook,
+                _send_alert(
                     f"Error Rate Alert — {agent}",
                     f"**{count} errors** in the last {window} minutes (threshold: {threshold})\n\n"
                     f"Latest: `{error[:200]}`",
@@ -137,10 +175,6 @@ def check_cost_alert():
     """
     alert_cfg = _get_alert_config()
     if not alert_cfg:
-        return
-
-    webhook = alert_cfg.get("discord_webhook", "")
-    if not webhook:
         return
 
     cooldown = alert_cfg.get("cooldown_minutes", 60)
@@ -167,15 +201,26 @@ def check_cost_alert():
 
             if total_cost >= threshold:
                 _last_fired["daily_cost"] = datetime.now(timezone.utc)
-                _send_discord_alert(
-                    webhook,
+                _send_alert(
                     "Daily Cost Alert",
                     f"**${total_cost:.2f}** spent in the last 24 hours (threshold: ${threshold:.2f})",
-                    color=0xFFA500,  # Orange
+                    color=0xFFA500,
+                    level="warning",
                 )
         except Exception as e:
             logger.debug(f"Cost alert check failed: {e}")
         break
+
+
+def send_schedule_failure_alert(schedule_id: str, consecutive_failures: int, last_error: str):
+    """Send an alert when a schedule is auto-disabled due to repeated failures."""
+    _send_alert(
+        f"Schedule Auto-Disabled — {schedule_id}",
+        f"**{consecutive_failures} consecutive failures** — schedule has been paused.\n\n"
+        f"Latest error: `{last_error[:300]}`\n\n"
+        f"Re-enable with: `alfred agent schedule enable <agent> {schedule_id}`",
+        color=0xFF6600,
+    )
 
 
 def send_bot_crash_alert(agent: str, error: str):
@@ -184,18 +229,14 @@ def send_bot_crash_alert(agent: str, error: str):
     if not alert_cfg:
         return
 
-    webhook = alert_cfg.get("discord_webhook", "")
-    if not webhook:
-        return
-
     # Bot crash alerts always fire (no cooldown check — these are critical)
     rules = alert_cfg.get("rules", [])
     for rule in rules:
         if rule.get("type") == "bot_crash" and rule.get("enabled", True):
-            _send_discord_alert(
-                webhook,
+            _send_alert(
                 f"Bot Crash — {agent}",
                 f"The agent/bot crashed with:\n```\n{error[:500]}\n```",
-                color=0xFF0000,  # Red
+                color=0xFF0000,
+                level="critical",
             )
             break

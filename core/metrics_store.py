@@ -92,7 +92,9 @@ class MetricsStore:
         # Anthropic
         "claude-sonnet-4-6": {"input": 3.0, "output": 15.0},
         "claude-sonnet-4-5-20250929": {"input": 3.0, "output": 15.0},
+        "claude-haiku-4-5-20251001": {"input": 0.80, "output": 4.0},
         "claude-haiku-3-5": {"input": 0.80, "output": 4.0},
+        "claude-opus-4-6": {"input": 15.0, "output": 75.0},
         "claude-opus-4": {"input": 15.0, "output": 75.0},
         # xAI
         "grok-3-fast": {"input": 5.0, "output": 25.0},
@@ -100,12 +102,30 @@ class MetricsStore:
         # OpenAI
         "gpt-5.2": {"input": 5.0, "output": 15.0},
         "gpt-4o": {"input": 2.50, "output": 10.0},
+        "gpt-4o-mini": {"input": 0.15, "output": 0.60},
         # Ollama — free (local)
+    }
+
+    # Fallback pricing for unknown models by prefix
+    _FALLBACK_PRICING = {
+        "claude-haiku": {"input": 0.80, "output": 4.0},
+        "claude-sonnet": {"input": 3.0, "output": 15.0},
+        "claude-opus": {"input": 15.0, "output": 75.0},
+        "grok": {"input": 5.0, "output": 25.0},
+        "gpt": {"input": 5.0, "output": 15.0},
     }
 
     def _estimate_cost(self, model: str, input_tokens: int, output_tokens: int) -> float:
         """Estimate cost in USD for a given model and token count."""
-        pricing = self.MODEL_PRICING.get(model, {})
+        pricing = self.MODEL_PRICING.get(model)
+
+        # Try fallback by prefix if exact match not found
+        if not pricing:
+            for prefix, fallback in self._FALLBACK_PRICING.items():
+                if model.startswith(prefix):
+                    pricing = fallback
+                    break
+
         if not pricing:
             return 0.0
         input_cost = (input_tokens / 1_000_000) * pricing.get("input", 0)

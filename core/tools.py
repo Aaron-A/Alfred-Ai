@@ -11,6 +11,7 @@ The registry makes tools available to agents without copying code around.
 """
 
 import json
+import uuid
 import inspect
 from typing import Callable, Any
 from dataclasses import dataclass, field
@@ -714,7 +715,9 @@ def register_builtin_tools(registry: ToolRegistry, agent_id: str = None,
         This creates a fresh agent instance, runs the task, and returns the response.
         Use this when a task falls outside your expertise or when another agent
         is better suited (e.g., delegate trading analysis to the trader agent).
+        Timeout: 5 minutes (configurable via delegation_timeout in alfred.json).
         """
+        import concurrent.futures
         from .agent import Agent, AgentConfig
         from .config import _load_config, config as cfg_obj
 
@@ -739,11 +742,18 @@ def register_builtin_tools(registry: ToolRegistry, agent_id: str = None,
         if agent_data.get("status") == "paused":
             return f"Error: Agent '{agent_name}' is paused."
 
+        timeout = full_cfg.get("delegation_timeout", 300)  # Default 5 minutes
+
         try:
             agent_config = AgentConfig.from_dict(agent_data)
             agent = Agent(agent_config, session_id="delegation")
-            response = agent.run(task)
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(agent.run, task)
+                response = future.result(timeout=timeout)
             return f"[{agent_name}] {response}"
+        except concurrent.futures.TimeoutError:
+            return f"Error: Delegation to '{agent_name}' timed out after {timeout}s"
         except Exception as e:
             return f"Error delegating to '{agent_name}': {e}"
 
@@ -802,7 +812,9 @@ def register_builtin_tools(registry: ToolRegistry, agent_id: str = None,
                 inbox = []
 
         # Add new message
+        msg_id = str(uuid.uuid4())[:8]
         inbox.append({
+            "id": msg_id,
             "from": "agent",  # Will be overridden by the calling context if needed
             "message": message,
             "priority": priority,
@@ -811,7 +823,11 @@ def register_builtin_tools(registry: ToolRegistry, agent_id: str = None,
         })
 
         inbox_file.write_text(_json.dumps(inbox, indent=2, default=str))
-        return f"Message sent to {to_agent}'s inbox ({len(inbox)} total messages)"
+        unread = sum(1 for m in inbox if not m.get("read", False))
+        return (
+            f"Message delivered to {to_agent}'s inbox "
+            f"(id: {msg_id}, {unread} unread, {len(inbox)} total)"
+        )
 
     registry.register_function(
         name="send_message",

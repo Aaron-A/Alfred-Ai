@@ -44,10 +44,28 @@ class MemoryStore:
         self.embedder = get_embedding_engine()
         self._tables: dict[str, lancedb.table.Table] = {}
         self._fts_indexed: set[str] = set()  # Tables that have FTS indexes
+        self.max_memories_per_agent = 10000  # Auto-compact when exceeded (0 = no limit)
 
     def _table_name(self, memory_type: str) -> str:
         """Generate table name from memory type."""
         return f"{config.MEMORY_TABLE_PREFIX}{memory_type}"
+
+    def _count_agent_memories(self, agent_id: str) -> int:
+        """Count total memories across all tables for a given agent."""
+        total = 0
+        for table_name in self._list_table_names():
+            if not table_name.startswith(config.MEMORY_TABLE_PREFIX):
+                continue
+            try:
+                table = self.db.open_table(table_name)
+                total += len(table.to_pandas().query(f"agent_id == '{agent_id}'"))
+            except Exception:
+                try:
+                    # Fallback: count via search
+                    total += len(table.search().where(f"agent_id = '{agent_id}'").limit(100000).to_list())
+                except Exception:
+                    pass
+        return total
 
     def _list_table_names(self) -> list[str]:
         """Get table names, handling both old (list) and new (response object) LanceDB APIs."""
@@ -127,6 +145,20 @@ class MemoryStore:
         # Set agent_id if not already set
         if not record.agent_id:
             record.agent_id = self.agent_id
+
+        # ─── Memory Quota Check ──────────────────────────────────
+        max_memories = self.max_memories_per_agent
+        if max_memories > 0:
+            try:
+                count = self._count_agent_memories(record.agent_id)
+                if count >= max_memories:
+                    logger.warning(
+                        f"Memory quota reached for {record.agent_id}: "
+                        f"{count}/{max_memories} — auto-compacting"
+                    )
+                    self.compact(max_age_days=60, min_importance=0.3)
+            except Exception as e:
+                logger.debug(f"Quota check failed (non-fatal): {e}")
 
         # Generate embedding from the rich text representation
         embed_text = record.to_embed_text()

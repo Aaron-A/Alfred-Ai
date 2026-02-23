@@ -119,6 +119,21 @@ class Schedule:
             self.fail_count += 1
             self.consecutive_failures += 1
 
+            # Auto-disable after 5 consecutive failures
+            if self.consecutive_failures >= 5 and self.enabled:
+                self.enabled = False
+                logger.warning(
+                    f"Schedule '{self.id}' auto-disabled after "
+                    f"{self.consecutive_failures} consecutive failures"
+                )
+                try:
+                    from .alerting import send_schedule_failure_alert
+                    send_schedule_failure_alert(
+                        self.id, self.consecutive_failures, result
+                    )
+                except Exception:
+                    pass  # Never let alerting break the scheduler
+
     @property
     def success_rate(self) -> float:
         """Success rate as a percentage (0-100)."""
@@ -635,6 +650,42 @@ class Scheduler:
                     logger.debug("Maintenance: no memories needed compaction")
             except Exception as e:
                 logger.warning(f"Maintenance compaction failed: {e}")
+
+            # Session cleanup — remove session files older than 30 days
+            try:
+                session_max_age = maintenance.get("session_max_age_days", 30)
+                from datetime import timedelta
+                cutoff = datetime.now() - timedelta(days=session_max_age)
+                cleanup_count = 0
+                workspace_root = config.PROJECT_ROOT / "workspaces"
+                if workspace_root.exists():
+                    for session_file in workspace_root.rglob("session_*.json"):
+                        if session_file.stat().st_mtime < cutoff.timestamp():
+                            session_file.unlink()
+                            cleanup_count += 1
+                if cleanup_count > 0:
+                    logger.info(f"Maintenance: cleaned up {cleanup_count} old session files")
+            except Exception as e:
+                logger.warning(f"Session cleanup failed: {e}")
+
+            # Metrics cleanup — remove events older than 90 days
+            try:
+                metrics_max_age = maintenance.get("metrics_max_age_days", 90)
+                import sqlite3
+                db_path = config.DATA_DIR / "metrics.db"
+                if db_path.exists():
+                    conn = sqlite3.connect(str(db_path))
+                    cursor = conn.execute(
+                        "DELETE FROM events WHERE timestamp < datetime('now', ?)",
+                        (f"-{metrics_max_age} days",),
+                    )
+                    deleted = cursor.rowcount
+                    conn.commit()
+                    conn.close()
+                    if deleted > 0:
+                        logger.info(f"Maintenance: pruned {deleted} old metric events")
+            except Exception as e:
+                logger.warning(f"Metrics cleanup failed: {e}")
 
         t = threading.Thread(target=_run_compact, daemon=True, name="maintenance-compact")
         t.start()

@@ -2613,6 +2613,8 @@ def cmd_start(foreground: bool = False, _daemon_child: bool = False, port: int =
             workspace.mkdir(parents=True, exist_ok=True)
 
             agent_config = AgentConfig.from_dict(agent_data)
+            # Enable reflection for scheduled tasks — helps agents learn from runs
+            agent_config.reflection_enabled = True
             agent = Agent(agent_config)
             # Scheduled tasks start with a clean session — they store
             # important findings in vector memory, so prior session

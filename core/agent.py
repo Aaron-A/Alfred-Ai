@@ -34,6 +34,26 @@ from .logging import get_logger, metrics
 
 logger = get_logger("agent")
 
+import re as _re
+
+# Patterns that look like secrets/API keys in output
+_SECRET_PATTERNS = [
+    _re.compile(r'\b(sk-[a-zA-Z0-9]{20,})\b'),           # OpenAI/Anthropic API keys
+    _re.compile(r'\b(xai-[a-zA-Z0-9]{20,})\b'),           # xAI keys
+    _re.compile(r'\b(AKIA[A-Z0-9]{16})\b'),                # AWS access keys
+    _re.compile(r'\b(ghp_[a-zA-Z0-9]{36,})\b'),            # GitHub tokens
+    _re.compile(r'\b(gho_[a-zA-Z0-9]{36,})\b'),            # GitHub OAuth tokens
+    _re.compile(r'\b(xoxb-[a-zA-Z0-9\-]+)\b'),             # Slack bot tokens
+    _re.compile(r'\b([a-f0-9]{64})\b'),                     # 64-char hex (generic secrets)
+]
+
+
+def _sanitize_secrets(text: str) -> str:
+    """Redact anything that looks like an API key or secret from text."""
+    for pattern in _SECRET_PATTERNS:
+        text = pattern.sub(lambda m: m.group()[:8] + "..." + "[REDACTED]", text)
+    return text
+
 
 @dataclass
 class AgentConfig:
@@ -76,6 +96,9 @@ class AgentConfig:
 
     # Reflection — post-session self-evaluation stored to memory
     reflection_enabled: bool = False  # Opt-in: run reflection after each session
+
+    # Cost budget — per-agent daily spending limit (0 = unlimited)
+    max_daily_cost: float = 0.0  # Max USD per day (0 = no limit)
 
     # Template — which archetype was used to create this agent
     template: str = ""
@@ -652,6 +675,24 @@ class Agent:
             logger.debug(f"{self.config.name}: tool summarization failed (non-fatal): {e}")
             return result
 
+    # ─── Tool Circuit Breaker ─────────────────────────────────────
+
+    # Per-tool failure counts for circuit breaker (shared across instances via class var)
+    _tool_failures: dict[str, int] = {}
+    _CIRCUIT_BREAKER_THRESHOLD = 3  # Failures before a tool is skipped
+
+    def _is_tool_tripped(self, tool_name: str) -> bool:
+        """Check if a tool's circuit breaker has tripped."""
+        return self._tool_failures.get(tool_name, 0) >= self._CIRCUIT_BREAKER_THRESHOLD
+
+    def _record_tool_failure(self, tool_name: str):
+        """Record a tool failure for circuit breaker tracking."""
+        self._tool_failures[tool_name] = self._tool_failures.get(tool_name, 0) + 1
+
+    def _record_tool_success(self, tool_name: str):
+        """Reset a tool's failure count on success."""
+        self._tool_failures.pop(tool_name, None)
+
     # ─── Tool Execution with Retry ───────────────────────────────
 
     # Transient error patterns worth retrying
@@ -664,7 +705,16 @@ class Agent:
 
         Retries up to max_retries times for transient errors (timeouts, rate limits, 5xx).
         Permanent errors (404, auth, validation) are returned immediately.
+        Circuit breaker: skips tools that have failed 3+ times consecutively.
         """
+        # Circuit breaker check
+        if self._is_tool_tripped(tool_name):
+            return (
+                f"Error: Tool '{tool_name}' is temporarily disabled after "
+                f"{self._CIRCUIT_BREAKER_THRESHOLD} consecutive failures. "
+                f"Try a different approach or tool."
+            )
+
         for attempt in range(max_retries + 1):
             result = self.registry.execute(tool_name, tool_input)
 
@@ -679,6 +729,7 @@ class Agent:
             )
 
             if not is_error:
+                self._record_tool_success(tool_name)
                 return result
 
             # Check if it's a transient error worth retrying
@@ -686,6 +737,7 @@ class Agent:
 
             if not is_transient or attempt >= max_retries:
                 # Permanent error or max retries reached — format for LLM
+                self._record_tool_failure(tool_name)
                 if attempt > 0:
                     logger.warning(f"{self.config.name}: tool {tool_name} failed after {attempt + 1} attempts: {result[:200]}")
                 else:
@@ -1004,6 +1056,22 @@ class Agent:
         # Apply any pending LLM switch from a prior turn's switch_model tool call
         self._apply_pending_llm_switch()
 
+        # Budget check — refuse to run if daily cost limit exceeded
+        if self.config.max_daily_cost > 0:
+            try:
+                from .metrics_store import MetricsStore
+                store = MetricsStore()
+                day_data = store.query(period="day", agent=self.config.name)
+                agent_cost = day_data.get("agents", {}).get(self.config.name, {}).get("estimated_cost", 0)
+                if agent_cost >= self.config.max_daily_cost:
+                    raise RuntimeError(
+                        f"Daily cost budget exceeded (${agent_cost:.2f} / ${self.config.max_daily_cost:.2f})"
+                    )
+            except RuntimeError:
+                raise
+            except Exception:
+                pass  # Don't block agent on metrics errors
+
         try:
             # Step 1: Auto-search memory for relevant context (scoped to this agent)
             memory_context = ""
@@ -1071,6 +1139,9 @@ class Agent:
             )
             token_info = f", {input_tokens}+{output_tokens} tokens" if input_tokens else ""
             logger.info(f"{self.config.name}: responded in {elapsed_ms}ms{token_info}")
+
+            # Sanitize any accidentally leaked secrets from the response
+            response = _sanitize_secrets(response)
 
             return response
 
@@ -1225,7 +1296,10 @@ class Agent:
                     if block.type == "tool_use":
                         tool_call_count += 1
                         logger.info(f"{self.config.name}: tool {block.name}({json.dumps(block.input)[:200]})")
+                        tool_start = time.monotonic()
                         result = self._execute_tool_with_retry(block.name, block.input)
+                        tool_ms = int((time.monotonic() - tool_start) * 1000)
+                        logger.info(f"{self.config.name}: tool {block.name} -> {tool_ms}ms ({len(result)} chars)")
                         # Summarize large results to save context
                         result = self._maybe_summarize_tool_result(block.name, result)
                         tool_results.append({
@@ -1352,7 +1426,10 @@ class Agent:
                     fn_args = json.loads(tc["function"]["arguments"])
                     tool_call_count += 1
                     logger.info(f"{self.config.name}: tool {fn_name}({json.dumps(fn_args)[:200]})")
+                    tool_start = time.monotonic()
                     tool_result = self._execute_tool_with_retry(fn_name, fn_args)
+                    tool_ms = int((time.monotonic() - tool_start) * 1000)
+                    logger.info(f"{self.config.name}: tool {fn_name} -> {tool_ms}ms ({len(tool_result)} chars)")
                     # Summarize large results to save context
                     tool_result = self._maybe_summarize_tool_result(fn_name, tool_result)
 
