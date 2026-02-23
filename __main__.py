@@ -2622,6 +2622,10 @@ def cmd_start(foreground: bool = False, _daemon_child: bool = False, port: int =
             agent_config = AgentConfig.from_dict(agent_data)
             # Enable reflection for scheduled tasks — helps agents learn from runs
             agent_config.reflection_enabled = True
+            # Cap tool rounds for scheduled runs (prevents runaway cost)
+            agent_config.max_tool_rounds = min(
+                agent_config.max_tool_rounds, agent_config.schedule_max_tool_rounds
+            )
             agent = Agent(agent_config)
             # Scheduled tasks start with a clean session — they store
             # important findings in vector memory, so prior session

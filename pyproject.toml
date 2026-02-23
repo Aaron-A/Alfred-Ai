@@ -1,6 +1,6 @@
 [project]
 name = "alfred-ai"
-version = "0.1.1"
+version = "0.1.2"
 description = "Memory-first AI agent framework with persistent agents, autonomous processes, and a real-time dashboard."
 readme = "README.md"
 license = {text = "MIT"}

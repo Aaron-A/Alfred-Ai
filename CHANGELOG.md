@@ -2,6 +2,13 @@
 
 All notable changes to Alfred AI will be documented in this file.
 
+## [0.1.2] - 2026-02-23
+
+### Added
+- Context Window Guard — monitors context size before each API call during tool loops and compacts older rounds when approaching the budget threshold (default 60% of model's context window), preventing quadratic token growth on long runs
+- `schedule_max_tool_rounds` config — separate (lower) tool round cap for scheduled runs (default 15)
+- Per-agent `context_window_tokens`, `context_budget_pct`, and `context_reserve_tokens` config options
+
 ## [0.1.1] - 2026-02-22
 
 ### Added

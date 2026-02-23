@@ -100,6 +100,12 @@ class AgentConfig:
     # Cost budget — per-agent daily spending limit (0 = unlimited)
     max_daily_cost: float = 0.0  # Max USD per day (0 = no limit)
 
+    # Context Window Guard — mid-run compaction to prevent quadratic token growth
+    context_window_tokens: int = 200000  # Model's context window size
+    context_budget_pct: float = 0.60  # Compact when context exceeds this % of window
+    context_reserve_tokens: int = 4096  # Always keep free for model's response
+    schedule_max_tool_rounds: int = 15  # Separate (lower) cap for scheduled runs
+
     # Template — which archetype was used to create this agent
     template: str = ""
 
@@ -592,6 +598,169 @@ class Agent:
 
         # Flatten remaining turns back into a flat message list
         return [m for turn in turns for m in turn]
+
+    # ─── Mid-Run Context Compaction (Context Window Guard) ──────
+
+    _COMPACT_SYSTEM_PROMPT = (
+        "You are a context compactor. You will receive a log of tool calls and their results "
+        "from an AI agent's current task. Summarize them into a concise recap:\n"
+        "- Which tools were called and what they returned (key data only)\n"
+        "- Decisions made or conclusions reached\n"
+        "- Errors encountered\n\n"
+        "Be extremely concise. Use bullet points. Preserve exact numbers, names, and IDs.\n"
+        "This summary replaces the original messages in the agent's context window."
+    )
+
+    def _compact_mid_run(self, messages: list[dict], keep_recent: int = 3) -> list[dict]:
+        """
+        Compact older tool rounds during a run to bound context growth.
+
+        Keeps the original user task message and the most recent `keep_recent`
+        tool round pairs. Summarizes everything in between into a single
+        compact recap message.
+
+        Returns the compacted messages list (always valid alternating structure).
+        """
+        # Find tool-round messages: pairs of (assistant+tool_use, user+tool_result)
+        # The first message is always the user's original task (or history)
+        # We need at least keep_recent*2 + 2 messages for compaction to matter
+        min_messages = keep_recent * 2 + 4  # task + at least 2 old rounds + recent rounds
+        if len(messages) < min_messages:
+            return messages
+
+        # Identify the original task message (first user message)
+        task_idx = 0
+        for i, m in enumerate(messages):
+            if m.get("role") == "user":
+                task_idx = i
+                break
+
+        # Everything after the task is tool rounds: (assistant, user) pairs
+        tool_messages = messages[task_idx + 1:]
+
+        # Split into round pairs: each round = [assistant+tool_use, user+tool_result]
+        rounds = []
+        i = 0
+        while i < len(tool_messages) - 1:
+            if tool_messages[i].get("role") == "assistant":
+                # Find the next user/tool message(s)
+                pair = [tool_messages[i]]
+                j = i + 1
+                while j < len(tool_messages) and tool_messages[j].get("role") in ("user", "tool"):
+                    pair.append(tool_messages[j])
+                    j += 1
+                rounds.append(pair)
+                i = j
+            else:
+                i += 1
+
+        if len(rounds) <= keep_recent:
+            return messages  # Not enough rounds to compact
+
+        # Split into old (to compact) and recent (to keep)
+        old_rounds = rounds[:-keep_recent]
+        recent_rounds = rounds[-keep_recent:]
+
+        # Build condensed text from old rounds
+        lines = []
+        for rnd in old_rounds:
+            for msg in rnd:
+                content = msg.get("content", "")
+                role = msg.get("role", "?")
+
+                if isinstance(content, list):
+                    for block in content:
+                        if isinstance(block, dict):
+                            if block.get("type") == "tool_use":
+                                tool_name = block.get("name", "?")
+                                tool_input = str(block.get("input", ""))[:100]
+                                lines.append(f"→ {tool_name}({tool_input})")
+                            elif block.get("type") == "tool_result":
+                                result_text = str(block.get("content", ""))[:200]
+                                lines.append(f"  ← {result_text}")
+                        elif hasattr(block, "type"):
+                            if getattr(block, "type", "") == "tool_use":
+                                lines.append(f"→ {getattr(block, 'name', '?')}({str(getattr(block, 'input', ''))[:100]})")
+                            elif hasattr(block, "text"):
+                                text = getattr(block, "text", "")
+                                if text.strip():
+                                    lines.append(f"  {text[:200]}")
+                elif isinstance(content, str) and content.strip():
+                    lines.append(f"  [{role}] {content[:200]}")
+
+        condensed = "\n".join(lines)
+
+        # If condensed text is large, use LLM to summarize it further
+        if len(condensed) > 4000:
+            try:
+                summary = self._llm_compact_summary(condensed[:8000])
+                if summary:
+                    condensed = summary
+            except Exception as e:
+                logger.debug(f"{self.config.name}: LLM compaction failed (non-fatal): {e}")
+                # Fall back to truncated condensed text
+                condensed = condensed[:3000] + "\n... [truncated]"
+
+        # Rebuild messages: [history...] + task + summary pair + recent rounds
+        compacted = messages[:task_idx + 1]  # Everything up to and including the task
+
+        # Insert summary as a valid user/assistant pair
+        compacted.append({
+            "role": "assistant",
+            "content": f"[Context compacted — {len(old_rounds)} earlier tool rounds summarized]\n{condensed}",
+        })
+        compacted.append({
+            "role": "user",
+            "content": "Continue with the task using the information above.",
+        })
+
+        # Append recent rounds (untouched)
+        for rnd in recent_rounds:
+            compacted.extend(rnd)
+
+        before_chars = sum(self._estimate_content_chars(m.get("content", "")) for m in messages)
+        after_chars = sum(self._estimate_content_chars(m.get("content", "")) for m in compacted)
+        logger.info(
+            f"{self.config.name}: mid-run compaction — {len(old_rounds)} rounds summarized, "
+            f"{before_chars} -> {after_chars} chars ({100 - int(after_chars/max(before_chars,1)*100)}% reduction)"
+        )
+
+        return compacted
+
+    def _llm_compact_summary(self, text: str) -> str | None:
+        """Make a lightweight LLM call to summarize compacted tool round text."""
+        prompt = f"Summarize these tool call logs from the current task:\n\n{text}"
+
+        if self.llm.provider == "anthropic":
+            response = self.llm.anthropic_client.messages.create(
+                model=self.llm.model,
+                max_tokens=512,
+                temperature=0.2,
+                system=self._COMPACT_SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            text_parts = [b.text for b in response.content if hasattr(b, "text")]
+            return "\n".join(text_parts).strip() or None
+        else:
+            import urllib.request as _urllib_req
+            url = f"{self.llm.base_url}/v1/chat/completions"
+            payload = {
+                "model": self.llm.model,
+                "max_tokens": 512,
+                "temperature": 0.2,
+                "messages": [
+                    {"role": "system", "content": self._COMPACT_SYSTEM_PROMPT},
+                    {"role": "user", "content": prompt},
+                ],
+            }
+            headers = {"Content-Type": "application/json", "User-Agent": "Alfred-AI/1.0"}
+            if self.llm.api_key and self.llm.provider != "ollama":
+                headers["Authorization"] = f"Bearer {self.llm.api_key}"
+            data = json.dumps(payload).encode("utf-8")
+            req = _urllib_req.Request(url, data=data, headers=headers, method="POST")
+            with _urllib_req.urlopen(req, timeout=30) as resp:
+                r = json.loads(resp.read().decode("utf-8"))
+            return r["choices"][0]["message"].get("content", "").strip() or None
 
     # ─── Tool Result Summarization ──────────────────────────────
 
@@ -1267,6 +1436,22 @@ class Agent:
         tool_call_count = 0
 
         for round_num in range(self.config.max_tool_rounds):
+            # ── Context Window Guard ──────────────────────────────
+            # Monitor total context size before each API call.
+            # If approaching the budget threshold, compact older tool rounds.
+            if round_num > 0:  # Skip round 0 — nothing to compact yet
+                context_chars = len(system) + sum(
+                    self._estimate_content_chars(m.get("content", "")) for m in messages
+                )
+                context_tokens_est = context_chars // 4
+                budget = int(self.config.context_window_tokens * self.config.context_budget_pct)
+                if context_tokens_est > budget:
+                    logger.info(
+                        f"{self.config.name}: context guard fired — "
+                        f"{context_tokens_est:,} tokens est. (budget {budget:,})"
+                    )
+                    messages = self._compact_mid_run(messages, keep_recent=3)
+
             kwargs = {
                 "model": self.llm.model,
                 "max_tokens": 4096,
@@ -1375,6 +1560,25 @@ class Agent:
         tool_call_count = 0
 
         for round_num in range(self.config.max_tool_rounds):
+            # ── Context Window Guard ──────────────────────────────
+            if round_num > 0:
+                sys_chars = sum(
+                    self._estimate_content_chars(m.get("content", ""))
+                    for m in messages if m.get("role") == "system"
+                )
+                msg_chars = sum(
+                    self._estimate_content_chars(m.get("content", ""))
+                    for m in messages if m.get("role") != "system"
+                )
+                context_tokens_est = (sys_chars + msg_chars) // 4
+                budget = int(self.config.context_window_tokens * self.config.context_budget_pct)
+                if context_tokens_est > budget:
+                    logger.info(
+                        f"{self.config.name}: context guard fired — "
+                        f"{context_tokens_est:,} tokens est. (budget {budget:,})"
+                    )
+                    messages = self._compact_mid_run(messages, keep_recent=3)
+
             # Build request
             url = f"{self.llm.base_url}/v1/chat/completions"
             payload = {
