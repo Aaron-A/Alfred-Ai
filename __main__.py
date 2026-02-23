@@ -139,6 +139,9 @@ Examples:
     alfred discord setup                            # Configure Discord channels
     alfred api start                                # Start REST API on port 7700
     alfred api start --port 8080                    # Start on custom port
+    alfred tool create my_tool                      # Scaffold a new tool
+    alfred export                                   # Export config + data for migration
+    alfred migrate ~/new-location                   # Move to a different directory
 """)
 
 
