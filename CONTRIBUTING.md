@@ -39,10 +39,37 @@ alfred setup
 
 ## Adding a Tool
 
-1. Create `tools/your_tool.py`
-2. Define your function(s)
-3. Add a `register(registry)` function that calls `registry.register_function()`
-4. The tool auto-discovers on next startup
+**Quick scaffold** — agents can create their own workspace tools at runtime:
+```bash
+alfred tool create my_tool       # Scaffolds a new tool file
+alfred tool search "web scraper" # Check if one already exists
+```
+
+**Manual creation** — for shared tools available to all agents:
+
+1. Create `tools/your_tool.py` (shared) or `workspaces/<agent>/tools/your_tool.py` (agent-specific)
+2. Use `snake_case` for filenames and function names
+3. Add full type hints to all parameters — these become the tool's input schema
+4. Include a clear docstring — the first line becomes the tool description shown to the LLM
+5. Handle errors gracefully — return error strings, don't raise exceptions
+6. Add a `register(registry)` function that calls `registry.register_function()`
+7. Optionally add `TOOL_META` dict with `version`, `author`, and `description`
+8. The tool auto-discovers on next startup
+
+```python
+TOOL_META = {"version": "1.0.0", "author": "you", "description": "Does something useful"}
+
+def my_tool(query: str, limit: int = 10) -> str:
+    """Search for things and return results."""
+    try:
+        # your logic here
+        return f"Found {len(results)} results"
+    except Exception as e:
+        return f"Error: {e}"
+
+def register(registry):
+    registry.register_function("my_tool", my_tool)
+```
 
 ## Reporting Bugs
 

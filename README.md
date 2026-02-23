@@ -107,6 +107,16 @@ alfred session delete <a> <id>  Delete a saved session
 alfred tools list               List all available tools
 alfred tools list <agent>       List tools for a specific agent
 
+alfred tool info <name>         Show tool details and source
+alfred tool install <url>       Install a community tool from URL
+alfred tool create <name>       Scaffold a new tool in agent workspace
+alfred tool search <query>      Search tool registry
+alfred tool remove <name>       Remove a workspace tool
+
+alfred service add              Add external service credentials
+alfred service list             List configured services
+alfred service remove           Remove a service
+
 alfred discord setup            Configure Discord bot (token, channels, agents)
 alfred discord status           Show Discord channel mappings
 
@@ -163,7 +173,7 @@ alfred-ai/
   __main__.py         CLI entry point — all commands route through here
   core/
     agent.py          Agent loop: recall → think → act → reflect → learn
-    alerting.py       Discord webhook alerts (errors, cost, crashes)
+    alerting.py       Discord + generic webhook alerts (errors, cost, schedule failures, crashes)
     api.py            FastAPI + trading proxy + agent CRUD + vector queries
     config.py         Config loading/saving (alfred.json)
     discord.py        Bot + daemon + proactive posting
@@ -174,9 +184,10 @@ alfred-ai/
     metrics_store.py  SQLite metrics + cost tracking + vector query logging
     models.py         Model registry and provider catalogs
     process.py        Shared PID/kill utilities
-    scheduler.py      Cron engine + weekly maintenance jobs
+    scheduler.py      Cron engine + auto-disable + session/metrics cleanup
     tool_discovery.py Auto-discovery of shared tools
-    tool_meta.py      Meta-tools (agents managing their own tools)
+    tool_meta.py      Meta-tools: list, search, create, install, remove
+    templates.py      Agent templates for rapid creation (trader, social, research, etc.)
     tools.py          Tool registry + memory_update/link
     workspace.py      Workspace creation and management
   cli/
@@ -221,6 +232,7 @@ alfred-ai/
 - **Deduplication** — before storing a new memory, a similarity check runs against existing records. Near-identical memories (≥ 95% similar) within 24 hours update the existing record instead.
 - **Pre-compaction flush** — when the session window fills up and old messages are trimmed, the agent summarizes the expiring context and stores it in vector memory.
 - **Weekly compaction** — a maintenance job prunes old low-importance records to keep the vector store lean.
+- **Memory quotas** — auto-compaction triggers when an agent exceeds 10K memories, keeping the vector store performant.
 - **Outcome linking** — `memory_link` connects decision memories to their trade/action outcomes, enabling causal learning.
 - **Embedding cache** — a 256-entry LRU cache (SHA-256 keyed) avoids redundant embedding computations.
 
@@ -239,17 +251,17 @@ alfred-ai/
 3. **Workspace** — in an agent's `workspace/tools/` directory, private to that agent
 4. **Meta-tools** — agents can create, edit, and manage their own tools at runtime
 
-Tool execution includes **auto-retry** on transient errors (timeout, 429, 503) with exponential backoff, and **result summarization** that compresses large tool outputs (> 2K chars) via a lightweight LLM call before feeding them back to the agent.
+Tool execution includes **auto-retry** on transient errors (timeout, 429, 503) with exponential backoff, **result summarization** that compresses large tool outputs (> 2K chars) via a lightweight LLM call before feeding them back to the agent, and a **circuit breaker** that auto-skips tools after 3 consecutive failures (resets on first success). Each tool call is timed and logged for observability.
 
-**Multi-agent delegation** lets agents hand tasks to each other. `delegate_to` runs a task synchronously on another agent and returns the result. `send_message` queues async messages to another agent's inbox. Agents see unread inbox notifications in their system prompt.
+**Multi-agent delegation** lets agents hand tasks to each other. `delegate_to` runs a task synchronously on another agent and returns the result (with a configurable timeout, default 5 minutes, to prevent hung delegations). `send_message` queues async messages to another agent's inbox with delivery confirmation and unique message IDs. Agents see unread inbox notifications in their system prompt.
 
-**Session persistence** saves conversation history to disk after every interaction, including full tool_use and tool_result blocks (preventing tool-call hallucination). On restart, agents resume where they left off. A sliding window keeps the last 50 turns (configurable), trimming oldest messages first — with pre-compaction flush preserving important context before anything is dropped.
+**Session persistence** saves conversation history to disk after every interaction, including full tool_use and tool_result blocks (preventing tool-call hallucination). On restart, agents resume where they left off. A sliding window keeps the last 50 turns (configurable), trimming oldest messages first — with pre-compaction flush preserving important context before anything is dropped. **Secret sanitization** automatically redacts API keys and tokens (sk-, xai-, ghp_, AKIA, etc.) from agent responses before they're returned or stored.
 
-**Cost tracking** estimates USD cost per interaction based on per-model token pricing. Costs are logged to SQLite and displayed on the dashboard by agent, by model, and as a running total. Daily cost alerts fire via Discord webhook when thresholds are exceeded.
+**Cost tracking** estimates USD cost per interaction based on per-model token pricing (with prefix-based fallbacks for unknown model variants). Costs are logged to SQLite and displayed on the dashboard by agent, by model, and as a running total. Daily cost alerts fire via webhook when thresholds are exceeded. Per-agent daily cost budgets (`max_daily_cost`) can cap spending — the agent refuses to run once the budget is hit.
 
-**Alerting** monitors operational health via Discord webhooks. Three alert types: error rate spikes (configurable threshold + time window), daily cost exceeding budget, and bot crashes (immediate, no cooldown). Each alert type has its own cooldown to prevent spam.
+**Alerting** monitors operational health via Discord webhooks and optional generic HTTP webhooks (`alerts.webhook_url`). Four alert types: error rate spikes (configurable threshold + time window), daily cost exceeding budget, bot crashes (immediate, no cooldown), and schedule failure alerts (when auto-disabled). Alerts are dispatched to all configured endpoints in parallel. Each alert type has its own cooldown to prevent spam.
 
-**Scheduling** uses cron expressions to run agent tasks on a timer. Each schedule tracks full run history with success/fail stats, elapsed time, and consecutive failure count. Failed tasks auto-retry with configurable `max_retries` and `retry_delay_seconds`. The scheduler also runs weekly maintenance jobs (memory compaction). Missed runs are caught up on startup within a 1-hour window.
+**Scheduling** uses cron expressions to run agent tasks on a timer. Each schedule tracks full run history with success/fail stats, elapsed time, and consecutive failure count. Failed tasks auto-retry with configurable `max_retries` and `retry_delay_seconds`. Schedules auto-disable after 5 consecutive failures with an alert notification. Reflection is automatically enabled for all scheduled runs. The scheduler also runs weekly maintenance jobs: memory compaction, session cleanup (files older than 30 days), and metrics pruning (events older than 90 days). Missed runs are caught up on startup within a 1-hour window.
 
 **Streaming** is supported across all providers. The API offers an SSE endpoint (`/v1/chat/stream`) for real-time token streaming. Discord supports optional progressive message editing.
 
@@ -284,7 +296,8 @@ All configuration lives in `alfred.json` (auto-generated by `alfred setup`):
     }
   },
   "alerts": {
-    "webhook_url": "https://discord.com/api/webhooks/...",
+    "discord_webhook": "https://discord.com/api/webhooks/...",
+    "webhook_url": "https://your-custom-endpoint.com/alerts",
     "rules": {
       "error_rate": { "threshold": 5, "window_minutes": 15, "cooldown_minutes": 30 },
       "daily_cost": { "threshold_usd": 10.0, "cooldown_minutes": 60 },
@@ -317,6 +330,8 @@ All configuration lives in `alfred.json` (auto-generated by `alfred setup`):
 | `tool_result_max_chars` | 2000 | Summarization threshold |
 | `auto_recall_threshold` | 0.4 | Memory relevance distance cutoff |
 | `memory_shared` | false | Cross-agent memory visibility |
+| `max_daily_cost` | 0 (unlimited) | Daily USD cost budget — agent refuses to run if exceeded |
+| `delegation_timeout` | 300 | Max seconds to wait for a delegated task |
 | `temperature` | 0.7 | LLM sampling temperature |
 
 ## Discord Setup

@@ -2,6 +2,26 @@
 
 All notable changes to Alfred AI will be documented in this file.
 
+## [0.1.1] - 2026-02-22
+
+### Added
+- Circuit breaker for failing tools (auto-skip after 3 consecutive failures, resets on success)
+- Per-agent daily cost budgets (`max_daily_cost`) — agent refuses to run if exceeded
+- Secret sanitization — redacts API keys and tokens (sk-, xai-, ghp_, AKIA, etc.) in agent responses
+- Schedule auto-disable after 5 consecutive failures with Discord/webhook alert
+- Delegation timeout (default 5 minutes) prevents hung delegated tasks
+- Memory quotas with auto-compaction at 10K memories per agent
+- Generic webhook alerts (`alerts.webhook_url`) alongside Discord
+- Tool execution timing and logging per call
+- Forced reflection for scheduled task runs
+- Session cleanup (>30 days) and metrics cleanup (>90 days) in maintenance cron
+- Model pricing fallbacks for unknown model variants (prefix-based lookup)
+- Message delivery confirmation with unique IDs in `send_message`
+- Agent templates for rapid creation (trader, social, research, etc.)
+- Tool management CLI: `alfred tool info/install/create/search/remove`
+- Service management CLI: `alfred service add/list/remove`
+- One-line install script (`install.sh`)
+
 ## [0.1.0] - 2026-02-22
 
 ### Added
