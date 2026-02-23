@@ -774,6 +774,39 @@ body {
   margin: 16px 0;
 }
 
+.modal-structured-badge {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  border-radius: 6px;
+  background: rgba(0, 255, 136, 0.08);
+  border: 1px solid rgba(0, 255, 136, 0.2);
+}
+.structured-tag {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: #00ff88;
+  background: rgba(0, 255, 136, 0.15);
+  padding: 2px 8px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+.structured-note {
+  font-size: 11px;
+  color: var(--muted);
+}
+body.light-theme .modal-structured-badge {
+  background: rgba(0, 128, 64, 0.06);
+  border-color: rgba(0, 128, 64, 0.25);
+}
+body.light-theme .structured-tag {
+  color: #007a3d;
+  background: rgba(0, 128, 64, 0.12);
+}
+
 .modal-field-row {
   display: flex;
   gap: 12px;

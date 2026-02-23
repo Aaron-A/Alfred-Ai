@@ -103,7 +103,6 @@ class AgentConfig:
     # Context Window Guard — mid-run compaction to prevent quadratic token growth
     context_window_tokens: int = 200000  # Model's context window size
     context_budget_pct: float = 0.60  # Compact when context exceeds this % of window
-    context_reserve_tokens: int = 4096  # Always keep free for model's response
     schedule_max_tool_rounds: int = 15  # Separate (lower) cap for scheduled runs
 
     # Scheduled run mode — "tool_use" (default) or "structured" (no tool schemas, JSON output)
@@ -1300,7 +1299,11 @@ class Agent:
             self.history.extend(new_messages)
 
             # Step 5.5: Reflection — post-session self-evaluation
-            if self.config.reflection_enabled and self.memory and tool_call_count > 0:
+            # Skip for structured mode — it already plans explicitly; reflection would
+            # just add a 3rd LLM call and negate cost savings.
+            is_structured = context and context.get("structured")
+            if self.config.reflection_enabled and self.memory and tool_call_count > 0 \
+                    and not is_structured:
                 self._run_reflection(message, response, tool_call_count)
 
             # Trim if we've grown past the window, then save to disk
@@ -1514,7 +1517,8 @@ class Agent:
                 result = self._execute_tool_with_retry(name, params)
                 tool_ms = int((time.monotonic() - tool_start) * 1000)
                 logger.info(f"{self.config.name}: structured: {name} -> {tool_ms}ms ({len(result)} chars)")
-                results.append({"tool": name, "result": result[:4000]})  # cap result size
+                cap = self.config.tool_result_max_chars * 2  # structured gets 2x (no summarization)
+                results.append({"tool": name, "result": result[:cap]})
             return results
 
         # ── Phase 1: Gather Plan ──

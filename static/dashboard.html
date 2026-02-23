@@ -272,7 +272,11 @@
       <select id="modalModel" class="modal-select" onchange="onModalModelChange()"></select>
     </div>
     <div class="modal-divider"></div>
-    <div class="modal-field-row">
+    <div class="modal-structured-badge" id="modalStructuredBadge" style="display:none">
+      <span class="structured-tag">STRUCTURED MODE</span>
+      <span class="structured-note">Tool rounds and context budget are managed automatically</span>
+    </div>
+    <div class="modal-field-row" id="modalRowRounds">
       <div class="modal-field modal-field--half">
         <label class="modal-label" for="modalMaxRounds">TOOL ROUNDS <span class="modal-help" onclick="showTooltip(this, 'Max API round-trips per run. Each round sends the full context to the LLM, which can request one or more tool calls. More rounds = more capable but more expensive. The agent stops when this limit is hit or it finishes the task.', event)">?</span></label>
         <input type="number" id="modalMaxRounds" class="modal-input" min="1" max="50" step="1">
@@ -289,7 +293,7 @@
         <input type="number" id="modalDailyCost" class="modal-input modal-input--prefixed" min="0" max="1000" step="0.50">
       </div>
     </div>
-    <div class="modal-field">
+    <div class="modal-field" id="modalRowContextBudget">
       <label class="modal-label" for="modalContextBudget">CONTEXT BUDGET <span class="modal-help" onclick="showTooltip(this, 'The Context Window Guard compacts older tool rounds when context size exceeds this percentage of the model\'s context window. Lower = more aggressive compaction (saves tokens but loses detail). Higher = keeps more history but costs more. Default: 60%.', event)">?</span></label>
       <div class="modal-input-wrap">
         <input type="number" id="modalContextBudget" class="modal-input modal-input--suffixed" min="10" max="95" step="5">

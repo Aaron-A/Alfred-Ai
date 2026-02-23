@@ -415,6 +415,7 @@ def create_app() -> FastAPI:
                 "max_daily_cost": acfg.get("max_daily_cost", 0),
                 "context_budget_pct": acfg.get("context_budget_pct", 0.60),
                 "schedule_max_tool_rounds": acfg.get("schedule_max_tool_rounds", 15),
+                "schedule_run_mode": acfg.get("schedule_run_mode", "tool_use"),
             })
         return {"agents": result}
 

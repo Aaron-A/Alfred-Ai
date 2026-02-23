@@ -392,6 +392,12 @@ function openConfigModal(agentName) {
   document.getElementById('modalDailyCost').value = agent.max_daily_cost ?? 0;
   document.getElementById('modalContextBudget').value = Math.round((agent.context_budget_pct ?? 0.60) * 100);
 
+  // Hide irrelevant fields for structured-mode agents
+  const isStructured = agent.schedule_run_mode === 'structured';
+  document.getElementById('modalRowRounds').style.display = isStructured ? 'none' : '';
+  document.getElementById('modalRowContextBudget').style.display = isStructured ? 'none' : '';
+  document.getElementById('modalStructuredBadge').style.display = isStructured ? '' : 'none';
+
   // SAVE always enabled — let user save whenever they want
   const saveBtn = document.getElementById('modalSaveBtn');
   saveBtn.textContent = 'SAVE';
