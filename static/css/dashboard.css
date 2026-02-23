@@ -616,6 +616,7 @@ body {
 }
 
 .modal-box {
+  position: relative;
   background: #111;
   border: 1px solid var(--border-light);
   border-radius: 6px;
@@ -712,6 +713,125 @@ body {
 .modal-select option {
   background: #111;
   color: var(--text);
+}
+
+.modal-divider {
+  border-top: 1px solid var(--border);
+  margin: 16px 0;
+}
+
+.modal-field-row {
+  display: flex;
+  gap: 12px;
+}
+
+.modal-field--half {
+  flex: 1;
+}
+
+.modal-input {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+  padding: 8px 10px;
+  width: 100%;
+  outline: none;
+  transition: var(--transition);
+  box-sizing: border-box;
+}
+
+.modal-input:hover { border-color: #444; }
+.modal-input:focus { border-color: var(--cyan); box-shadow: 0 0 0 1px rgba(6, 182, 212, 0.2); }
+
+/* Hide number input spinners for cleaner look */
+.modal-input[type="number"]::-webkit-inner-spin-button,
+.modal-input[type="number"]::-webkit-outer-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+.modal-input[type="number"] { -moz-appearance: textfield; }
+
+.modal-input-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.modal-input-prefix {
+  position: absolute;
+  left: 10px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  color: var(--text-dim);
+  pointer-events: none;
+  z-index: 1;
+}
+
+.modal-input--prefixed {
+  padding-left: 22px;
+}
+
+.modal-input-suffix {
+  position: absolute;
+  right: 10px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  color: var(--text-dim);
+  pointer-events: none;
+  z-index: 1;
+}
+
+.modal-input--suffixed {
+  padding-right: 28px;
+}
+
+.modal-help {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  border: 1px solid var(--border-light);
+  font-size: 8px;
+  font-weight: 700;
+  color: var(--text-dim);
+  cursor: pointer;
+  vertical-align: middle;
+  margin-left: 4px;
+  position: relative;
+  transition: var(--transition);
+  user-select: none;
+}
+
+.modal-help:hover {
+  border-color: var(--cyan);
+  color: var(--cyan);
+}
+
+.modal-tooltip {
+  display: none;
+  position: absolute;
+  left: 0;
+  right: 0;
+  background: #1a1a1a;
+  border: 1px solid var(--cyan);
+  border-radius: var(--radius);
+  padding: 10px 14px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-muted);
+  z-index: 100;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+}
+
+.modal-tooltip.active {
+  display: block;
 }
 
 .modal-actions {

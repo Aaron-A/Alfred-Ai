@@ -263,17 +263,43 @@
     </div>
     <div class="modal-current">Current: <span id="modalCurrent">-</span></div>
     <div class="modal-field">
-      <label class="modal-label" for="modalProvider">PROVIDER</label>
+      <label class="modal-label" for="modalProvider">PROVIDER <span class="modal-help" onclick="showTooltip(this, 'LLM provider for this agent — Anthropic, xAI, OpenAI, or Ollama. Each provider has its own set of available models.', event)">?</span></label>
       <select id="modalProvider" class="modal-select" onchange="onModalProviderChange()"></select>
     </div>
     <div class="modal-field">
-      <label class="modal-label" for="modalModel">MODEL</label>
+      <label class="modal-label" for="modalModel">MODEL <span class="modal-help" onclick="showTooltip(this, 'Which model this agent uses for all LLM calls. Larger models are more capable but cost more per token.', event)">?</span></label>
       <select id="modalModel" class="modal-select" onchange="onModalModelChange()"></select>
+    </div>
+    <div class="modal-divider"></div>
+    <div class="modal-field-row">
+      <div class="modal-field modal-field--half">
+        <label class="modal-label" for="modalMaxRounds">TOOL ROUNDS <span class="modal-help" onclick="showTooltip(this, 'Max API round-trips per run. Each round sends the full context to the LLM, which can request one or more tool calls. More rounds = more capable but more expensive. The agent stops when this limit is hit or it finishes the task.', event)">?</span></label>
+        <input type="number" id="modalMaxRounds" class="modal-input" min="1" max="50" step="1">
+      </div>
+      <div class="modal-field modal-field--half">
+        <label class="modal-label" for="modalScheduleRounds">SCHED ROUNDS <span class="modal-help" onclick="showTooltip(this, 'Separate tool round cap for scheduled (cron) runs. This overrides Tool Rounds for automated tasks, keeping them cheaper than interactive chat sessions. Default: 15.', event)">?</span></label>
+        <input type="number" id="modalScheduleRounds" class="modal-input" min="1" max="50" step="1">
+      </div>
+    </div>
+    <div class="modal-field">
+      <label class="modal-label" for="modalDailyCost">DAILY BUDGET <span class="modal-help" onclick="showTooltip(this, 'Maximum USD the agent can spend per day. Once this budget is exceeded, the agent refuses to run until the next day. Set to 0 for unlimited spending. Tracked via per-model token pricing in the metrics database.', event)">?</span></label>
+      <div class="modal-input-wrap">
+        <span class="modal-input-prefix">$</span>
+        <input type="number" id="modalDailyCost" class="modal-input modal-input--prefixed" min="0" max="1000" step="0.50">
+      </div>
+    </div>
+    <div class="modal-field">
+      <label class="modal-label" for="modalContextBudget">CONTEXT BUDGET <span class="modal-help" onclick="showTooltip(this, 'The Context Window Guard compacts older tool rounds when context size exceeds this percentage of the model\'s context window. Lower = more aggressive compaction (saves tokens but loses detail). Higher = keeps more history but costs more. Default: 60%.', event)">?</span></label>
+      <div class="modal-input-wrap">
+        <input type="number" id="modalContextBudget" class="modal-input modal-input--suffixed" min="10" max="95" step="5">
+        <span class="modal-input-suffix">%</span>
+      </div>
     </div>
     <div class="modal-actions">
       <button class="modal-btn modal-btn--dismiss" onclick="closeConfigModal()">CANCEL</button>
       <button class="modal-btn modal-btn--save" id="modalSaveBtn" disabled onclick="saveModalConfig()">SAVE</button>
     </div>
+    <div class="modal-tooltip" id="modalTooltip"></div>
   </div>
 </div>
 

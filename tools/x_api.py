@@ -367,9 +367,9 @@ def x_follow_user(username: str) -> str:
 
 
 def x_search_tweets(query: str, max_results: int = 10) -> str:
-    """Search recent tweets on X/Twitter."""
+    """Search recent tweets on X/Twitter. Returns tweet IDs, text, author, and metrics."""
     max_results = min(max(10, max_results), 100)
-    return x_api_request(
+    raw = x_api_request(
         endpoint="/2/tweets/search/recent",
         params=json.dumps({
             "query": query,
@@ -379,6 +379,35 @@ def x_search_tweets(query: str, max_results: int = 10) -> str:
             "user.fields": "name,username,verified",
         }),
     )
+    # Parse into compact format preserving tweet IDs for likes/replies
+    try:
+        json_str = raw.split("\n", 1)[1] if "\n" in raw else raw
+        data = json.loads(json_str)
+
+        # Build username lookup from includes
+        users = {}
+        for u in data.get("includes", {}).get("users", []):
+            users[u["id"]] = f"@{u['username']}"
+
+        tweets = data.get("data", [])
+        if not tweets:
+            return f"No tweets found for: {query}"
+
+        lines = [f"Found {len(tweets)} tweets for: {query}\n"]
+        for t in tweets:
+            tid = t["id"]
+            text = t.get("text", "")[:200]
+            author = users.get(t.get("author_id", ""), "unknown")
+            metrics = t.get("public_metrics", {})
+            likes = metrics.get("like_count", 0)
+            rts = metrics.get("retweet_count", 0)
+            replies = metrics.get("reply_count", 0)
+            impressions = metrics.get("impression_count", 0)
+            lines.append(f"[{tid}] {author}: {text}")
+            lines.append(f"  replies:{replies} retweets:{rts} likes:{likes} views:{impressions}")
+        return "\n".join(lines)
+    except (json.JSONDecodeError, KeyError, IndexError):
+        return raw  # Fall back to raw response if parsing fails
 
 
 def x_delete_tweet(tweet_id: str) -> str:

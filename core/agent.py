@@ -776,10 +776,14 @@ class Agent:
     )
 
     # Tools whose output should never be summarized (already concise or structured)
+    # X tools: search results contain tweet IDs needed for likes/replies
+    # Trading tools: Alpaca JSON has precise equity/position data needed for decisions
     _SKIP_SUMMARIZE_TOOLS = {"memory_search", "memory_store", "memory_search_global",
                               "memory_update", "memory_link",
                               "check_inbox", "send_message", "delegate_to",
-                              "switch_model", "tool_list", "tool_search"}
+                              "switch_model", "tool_list", "tool_search",
+                              "x_search_tweets", "x_api", "x_get_metrics",
+                              "http_request", "trading_bot"}
 
     def _maybe_summarize_tool_result(self, tool_name: str, result: str) -> str:
         """

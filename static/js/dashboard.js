@@ -369,11 +369,17 @@ function openConfigModal(agentName) {
   // Current display
   document.getElementById('modalCurrent').textContent = `${provider} / ${model}`;
 
-  // Reset button states
+  // Populate config fields with current values (or defaults)
+  document.getElementById('modalMaxRounds').value = agent.max_tool_rounds ?? 10;
+  document.getElementById('modalScheduleRounds').value = agent.schedule_max_tool_rounds ?? 15;
+  document.getElementById('modalDailyCost').value = agent.max_daily_cost ?? 0;
+  document.getElementById('modalContextBudget').value = Math.round((agent.context_budget_pct ?? 0.60) * 100);
+
+  // SAVE always enabled — let user save whenever they want
   const saveBtn = document.getElementById('modalSaveBtn');
   saveBtn.textContent = 'SAVE';
-  saveBtn.disabled = true;
-  saveBtn.className = 'modal-btn modal-btn--save';
+  saveBtn.disabled = false;
+  saveBtn.className = 'modal-btn modal-btn--save modal-btn--active';
 
   // Show modal
   modal.classList.add('active');
@@ -381,7 +387,42 @@ function openConfigModal(agentName) {
 
 function closeConfigModal() {
   document.getElementById('configModal').classList.remove('active');
+  hideTooltip();
 }
+
+function showTooltip(el, text, evt) {
+  if (evt) { evt.preventDefault(); evt.stopPropagation(); }
+  const tooltip = document.getElementById('modalTooltip');
+  // Toggle — click again to dismiss
+  if (tooltip.classList.contains('active') && tooltip._source === el) {
+    hideTooltip();
+    return;
+  }
+  tooltip.textContent = text;
+  tooltip._source = el;
+
+  // Position below the ? icon
+  const rect = el.getBoundingClientRect();
+  const modalBox = el.closest('.modal-box');
+  const modalRect = modalBox.getBoundingClientRect();
+  tooltip.style.top = (rect.bottom - modalRect.top + 6) + 'px';
+  tooltip.style.left = '0';
+  tooltip.style.right = '0';
+  tooltip.classList.add('active');
+}
+
+function hideTooltip() {
+  const tooltip = document.getElementById('modalTooltip');
+  tooltip.classList.remove('active');
+  tooltip._source = null;
+}
+
+// Dismiss tooltip when clicking outside
+document.addEventListener('click', (e) => {
+  if (!e.target.classList.contains('modal-help')) {
+    hideTooltip();
+  }
+});
 
 function onModalProviderChange() {
   const providerSelect = document.getElementById('modalProvider');
@@ -392,11 +433,9 @@ function onModalProviderChange() {
   const models = state.providerModels[newProvider] || [];
   modelSelect.innerHTML = buildModelOptions(newProvider, models[0] || '');
 
-  checkModalDirty();
 }
 
 function onModalModelChange() {
-  checkModalDirty();
 }
 
 function checkModalDirty() {
@@ -410,7 +449,14 @@ function checkModalDirty() {
   const newProvider = document.getElementById('modalProvider').value;
   const newModel = document.getElementById('modalModel').value;
 
-  const isDirty = (newProvider !== origProvider || newModel !== origModel);
+  const isDirty = (
+    newProvider !== origProvider ||
+    newModel !== origModel ||
+    parseInt(document.getElementById('modalMaxRounds').value) !== (agent.max_tool_rounds ?? 10) ||
+    parseInt(document.getElementById('modalScheduleRounds').value) !== (agent.schedule_max_tool_rounds ?? 15) ||
+    parseFloat(document.getElementById('modalDailyCost').value) !== (agent.max_daily_cost ?? 0) ||
+    parseInt(document.getElementById('modalContextBudget').value) !== Math.round((agent.context_budget_pct ?? 0.60) * 100)
+  );
   const saveBtn = document.getElementById('modalSaveBtn');
   saveBtn.disabled = !isDirty;
   saveBtn.className = isDirty ? 'modal-btn modal-btn--save modal-btn--active' : 'modal-btn modal-btn--save';
@@ -421,12 +467,19 @@ async function saveModalConfig() {
   const agentName = modal.dataset.agent;
   const provider = document.getElementById('modalProvider').value;
   const model = document.getElementById('modalModel').value;
+  const max_tool_rounds = parseInt(document.getElementById('modalMaxRounds').value);
+  const schedule_max_tool_rounds = parseInt(document.getElementById('modalScheduleRounds').value);
+  const max_daily_cost = parseFloat(document.getElementById('modalDailyCost').value);
+  const context_budget_pct = parseInt(document.getElementById('modalContextBudget').value) / 100;
 
   const saveBtn = document.getElementById('modalSaveBtn');
   saveBtn.disabled = true;
   saveBtn.textContent = 'SAVING...';
 
-  const result = await patchJSON(`/v1/agents/${agentName}/config`, { provider, model });
+  const result = await patchJSON(`/v1/agents/${agentName}/config`, {
+    provider, model, max_tool_rounds, schedule_max_tool_rounds,
+    max_daily_cost, context_budget_pct,
+  });
 
   if (result?.message) {
     // Update local state
@@ -434,6 +487,10 @@ async function saveModalConfig() {
     if (agent) {
       agent.provider = provider;
       agent.model = model;
+      agent.max_tool_rounds = max_tool_rounds;
+      agent.schedule_max_tool_rounds = schedule_max_tool_rounds;
+      agent.max_daily_cost = max_daily_cost;
+      agent.context_budget_pct = context_budget_pct;
     }
 
     saveBtn.textContent = 'SAVED';

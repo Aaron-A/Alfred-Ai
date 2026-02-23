@@ -410,6 +410,11 @@ def create_app() -> FastAPI:
                 "workspace": acfg.get("workspace", ""),
                 "provider": acfg.get("provider", global_provider),
                 "model": acfg.get("model", global_model),
+                # Config fields for the edit modal
+                "max_tool_rounds": acfg.get("max_tool_rounds", 10),
+                "max_daily_cost": acfg.get("max_daily_cost", 0),
+                "context_budget_pct": acfg.get("context_budget_pct", 0.60),
+                "schedule_max_tool_rounds": acfg.get("schedule_max_tool_rounds", 15),
             })
         return {"agents": result}
 
@@ -1081,11 +1086,16 @@ def create_app() -> FastAPI:
     class AgentConfigUpdate(BaseModel):
         provider: Optional[str] = None
         model: Optional[str] = None
+        max_tool_rounds: Optional[int] = None
+        max_daily_cost: Optional[float] = None
+        context_budget_pct: Optional[float] = None
+        schedule_max_tool_rounds: Optional[int] = None
+        temperature: Optional[float] = None
 
     @app.patch("/v1/agents/{name}/config")
     async def update_agent_config(name: str, update: AgentConfigUpdate):
         """
-        Update an agent's provider/model in alfred.json.
+        Update an agent's config in alfred.json.
 
         Only accepts known providers and their known models.
         """
@@ -1118,11 +1128,21 @@ def create_app() -> FastAPI:
             agents_cfg[name]["provider"] = update.provider
         if update.model:
             agents_cfg[name]["model"] = update.model
+        if update.max_tool_rounds is not None:
+            agents_cfg[name]["max_tool_rounds"] = max(1, min(50, update.max_tool_rounds))
+        if update.max_daily_cost is not None:
+            agents_cfg[name]["max_daily_cost"] = max(0, update.max_daily_cost)
+        if update.context_budget_pct is not None:
+            agents_cfg[name]["context_budget_pct"] = max(0.1, min(0.95, update.context_budget_pct))
+        if update.schedule_max_tool_rounds is not None:
+            agents_cfg[name]["schedule_max_tool_rounds"] = max(1, min(50, update.schedule_max_tool_rounds))
+        if update.temperature is not None:
+            agents_cfg[name]["temperature"] = max(0, min(2, update.temperature))
 
         cfg["agents"] = agents_cfg
         _save_config(cfg)
 
-        logger.info(f"Updated agent '{name}' config: provider={update.provider}, model={update.model}")
+        logger.info(f"Updated agent '{name}' config: {update.model_dump(exclude_none=True)}")
 
         return {
             "message": f"Agent '{name}' config updated",
