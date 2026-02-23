@@ -47,6 +47,31 @@ AGENTS_TEMPLATE = """# AGENTS.md - {name} Workspace
 - Use `tool_create` to build new tools when you need capabilities you don't have
 - Custom tools you create go in your workspace `tools/` directory
 
+### Creating Tools
+When you create a tool with `tool_create`, follow these conventions:
+- **Name**: Use snake_case (e.g. `fetch_price`, `parse_csv`)
+- **Code**: Provide ONLY the function body — the boilerplate is auto-generated
+- **Parameters**: Use type hints (str, int, float, bool) — they're auto-detected
+- **Return type**: Always return a string (the result shown to you)
+- **Dependencies**: List pip packages in the `dependencies` field (comma-separated)
+- **Error handling**: Wrap external calls in try/except and return error messages
+- **Always search first**: Call `tool_search` before creating to avoid duplicates
+
+Example `code` parameter for tool_create:
+```
+def fetch_headline(url: str) -> str:
+    \"\"\"Fetch the main headline from a web page.\"\"\"
+    try:
+        import requests
+        from bs4 import BeautifulSoup
+        resp = requests.get(url, timeout=10)
+        soup = BeautifulSoup(resp.text, "html.parser")
+        h1 = soup.find("h1")
+        return h1.text.strip() if h1 else "No headline found"
+    except Exception as e:
+        return f"Error: {{e}}"
+```
+
 ## Rules
 - Don't fabricate data — if you can't find it, say so
 - Log important outcomes and lessons learned to memory
@@ -128,7 +153,8 @@ def generate_tools_md(registry: ToolRegistry, tool_names: list[str] = None) -> s
     header = (
         "# TOOLS.md - Available Tools\n\n"
         "> Auto-generated from tool registry. Do not edit manually.\n"
-        "> To add custom tools, create Python files in your workspace `tools/` directory.\n"
+        "> To add custom tools, use `tool_create` or create Python files in your workspace `tools/` directory.\n"
+        "> Community tools can be installed with `alfred tool install <name>` from the CLI.\n"
         "> Use `tool_list` at runtime for the most current view.\n\n"
     )
 

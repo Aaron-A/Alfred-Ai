@@ -189,15 +189,21 @@ def register_meta_tools(registry: ToolRegistry, agent_name: str, workspace_path:
         description=(
             "Create a new tool in your workspace. Writes a Python file and registers it immediately. "
             "The 'code' parameter should contain ONLY the function definition (def function_name(...): ...). "
-            "The tool file boilerplate is generated automatically. "
-            "IMPORTANT: Always call tool_search first to check if the tool already exists."
+            "The boilerplate (imports, register(), parameter detection) is generated automatically. "
+            "REQUIREMENTS: "
+            "1. Always call tool_search first to check if the tool already exists. "
+            "2. The function name must match the tool name exactly (snake_case). "
+            "3. Use type hints on parameters (str, int, float, bool) — they are auto-detected. "
+            "4. The function must return a string. "
+            "5. Wrap external calls in try/except and return error messages as strings. "
+            "6. List any pip packages in the dependencies field."
         ),
         fn=tool_create,
         parameters=[
-            ToolParameter("name", "string", "Tool name (must be a valid Python identifier, e.g. 'get_price')"),
-            ToolParameter("description", "string", "What this tool does (shown to the LLM)"),
-            ToolParameter("code", "string", "The Python function code. Must define a function with the same name as the tool."),
-            ToolParameter("category", "string", "Tool category (e.g. 'trading', 'data', 'search')", required=False),
+            ToolParameter("name", "string", "Tool name in snake_case (e.g. 'get_price', 'parse_csv')"),
+            ToolParameter("description", "string", "Clear description of what this tool does — this is shown to the LLM when deciding which tool to call"),
+            ToolParameter("code", "string", "The Python function code. Must define a function with the same name as the tool. Use type hints for parameters. Must return a string."),
+            ToolParameter("category", "string", "Tool category (e.g. 'trading', 'data', 'search', 'web', 'custom')", required=False),
             ToolParameter("dependencies", "string", "Comma-separated pip packages needed (e.g. 'requests,beautifulsoup4')", required=False),
         ],
         category="meta",
