@@ -137,7 +137,7 @@ def generate_tools_md(registry: ToolRegistry, tool_names: list[str] = None) -> s
 
 
 def create_workspace(workspace_path: str, agent_name: str, overwrite: bool = False,
-                     registry: ToolRegistry = None,
+                     registry: ToolRegistry = None, template=None,
                      creator: str = "", birthday: str = "",
                      user_name: str = "") -> list[str]:
     """
@@ -148,6 +148,7 @@ def create_workspace(workspace_path: str, agent_name: str, overwrite: bool = Fal
         agent_name: Name of the agent
         overwrite: If True, overwrite existing files
         registry: Optional tool registry to generate TOOLS.md from
+        template: Optional AgentTemplate with custom SOUL.md and config presets
         creator: Name of the person who created this agent
         birthday: The agent's creation date
         user_name: The user this agent serves
@@ -168,8 +169,13 @@ def create_workspace(workspace_path: str, agent_name: str, overwrite: bool = Fal
     if not creator:
         creator = user_name or "(not set)"
 
+    # Use template SOUL.md if provided, otherwise default
+    soul_content = (template.soul_template if template else SOUL_TEMPLATE).format(
+        name=agent_name, creator=creator, birthday=birthday
+    )
+
     templates = {
-        "SOUL.md": SOUL_TEMPLATE.format(name=agent_name, creator=creator, birthday=birthday),
+        "SOUL.md": soul_content,
         "AGENTS.md": AGENTS_TEMPLATE.format(name=agent_name),
         "USER.md": USER_TEMPLATE.format(user_name=user_name or "(not set)"),
     }

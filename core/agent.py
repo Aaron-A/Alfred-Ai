@@ -77,6 +77,9 @@ class AgentConfig:
     # Reflection — post-session self-evaluation stored to memory
     reflection_enabled: bool = False  # Opt-in: run reflection after each session
 
+    # Template — which archetype was used to create this agent
+    template: str = ""
+
     @classmethod
     def from_dict(cls, data: dict) -> "AgentConfig":
         return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})

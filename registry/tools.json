@@ -1,0 +1,47 @@
+{
+  "version": "1.0.0",
+  "description": "Alfred AI Community Tool Registry",
+  "updated": "2026-02-22",
+  "tools": [
+    {
+      "name": "web_scraper",
+      "version": "0.1.0",
+      "author": "Alfred Community",
+      "description": "Scrape and extract text content from web pages",
+      "url": "https://raw.githubusercontent.com/Aaron-A/Alfred-Ai/main/registry/contrib/web_scraper.py",
+      "tags": ["web", "scraping", "http"]
+    },
+    {
+      "name": "csv_reader",
+      "version": "0.1.0",
+      "author": "Alfred Community",
+      "description": "Read and query CSV files with filtering and aggregation",
+      "url": "https://raw.githubusercontent.com/Aaron-A/Alfred-Ai/main/registry/contrib/csv_reader.py",
+      "tags": ["data", "csv", "files"]
+    },
+    {
+      "name": "json_transform",
+      "version": "0.1.0",
+      "author": "Alfred Community",
+      "description": "Transform, filter, and restructure JSON data",
+      "url": "https://raw.githubusercontent.com/Aaron-A/Alfred-Ai/main/registry/contrib/json_transform.py",
+      "tags": ["data", "json", "transform"]
+    },
+    {
+      "name": "rss_feed",
+      "version": "0.1.0",
+      "author": "Alfred Community",
+      "description": "Fetch and parse RSS/Atom feeds for news monitoring",
+      "url": "https://raw.githubusercontent.com/Aaron-A/Alfred-Ai/main/registry/contrib/rss_feed.py",
+      "tags": ["rss", "news", "feeds"]
+    },
+    {
+      "name": "image_describe",
+      "version": "0.1.0",
+      "author": "Alfred Community",
+      "description": "Generate descriptions of images using vision models",
+      "url": "https://raw.githubusercontent.com/Aaron-A/Alfred-Ai/main/registry/contrib/image_describe.py",
+      "tags": ["image", "vision", "ai"]
+    }
+  ]
+}

@@ -96,6 +96,13 @@ Commands:
     tools list [agent_name]             List all registered tools
                                         (omit name for global view, add name for agent-specific)
 
+    tool list [agent_name]              List tools (same as 'tools list')
+    tool info <name>                    Show detailed info for a tool
+    tool install <name|url>             Install a community tool (by name or URL)
+    tool create <name>                  Scaffold a new tool file
+    tool search <query>                 Search the community tool registry
+    tool remove <name>                  Remove a community-installed tool
+
     service add <name>                  Add credentials for an external service
     service list                        Show configured services (masked keys)
     service remove <name>               Remove a service configuration
@@ -281,12 +288,13 @@ def cmd_status():
     console.print()
 
 
-def cmd_agent_create(name: str):
+def cmd_agent_create(name: str, template_name: str = None):
     from rich.console import Console
     from rich.prompt import Prompt, Confirm
     from rich.rule import Rule
     from core.config import CONFIG_FILE, _load_config, _save_config, config
     from core.workspace import create_workspace
+    from core.templates import TEMPLATES, get_template
 
     console = Console()
 
@@ -304,6 +312,27 @@ def cmd_agent_create(name: str):
 
     console.print()
     console.print(Rule(f"[bold]Create Agent: {name}", style="cyan"))
+    console.print()
+
+    # Template selection
+    if template_name:
+        template = get_template(template_name)
+        if not template:
+            console.print(f"  [red]Unknown template: {template_name}[/]")
+            console.print(f"  Available: {', '.join(TEMPLATES.keys())}")
+            return
+    else:
+        console.print("  [bold]Choose an archetype:[/]\n")
+        tpl_list = list(TEMPLATES.values())
+        for i, t in enumerate(tpl_list, 1):
+            default_tag = " [dim](default)[/]" if t.name == "general" else ""
+            console.print(f"    [cyan]{i}.[/] {t.display_name}{default_tag} — {t.description}")
+        choice = Prompt.ask("\n  Select archetype", default="1")
+        idx = int(choice) - 1 if choice.isdigit() else 0
+        idx = max(0, min(idx, len(tpl_list) - 1))
+        template = tpl_list[idx]
+
+    console.print(f"  ✓ Template: [bold]{template.display_name}[/]")
     console.print()
 
     # Description
@@ -347,7 +376,8 @@ def cmd_agent_create(name: str):
     discover_shared_tools(temp_registry)
 
     # Create workspace with tools/ subdir and auto-generated TOOLS.md
-    created_files = create_workspace(workspace_path, name, registry=temp_registry)
+    created_files = create_workspace(workspace_path, name, registry=temp_registry,
+                                     template=template)
     if created_files:
         console.print(f"\n  [green]Created workspace files:[/]")
         for f in created_files:
@@ -358,15 +388,22 @@ def cmd_agent_create(name: str):
     if "agents" not in cfg:
         cfg["agents"] = {}
 
-    cfg["agents"][name] = {
+    agent_entry = {
         "workspace": f"workspaces/{name}",
         "description": description,
         "status": "active",
+        "template": template.name,
+        "temperature": template.temperature,
+        "max_tool_rounds": template.max_tool_rounds,
     }
+    if template.tools_denied:
+        agent_entry["tools_denied"] = template.tools_denied
     if provider:
-        cfg["agents"][name]["provider"] = provider
+        agent_entry["provider"] = provider
     if model:
-        cfg["agents"][name]["model"] = model
+        agent_entry["model"] = model
+
+    cfg["agents"][name] = agent_entry
 
     _save_config(cfg)
 
@@ -1967,6 +2004,155 @@ def cmd_tools_list(agent_name: str = None):
     console.print()
 
 
+# ─── Tool Registry Commands ──────────────────────────────────────
+
+def cmd_tool_info(name: str):
+    """Show detailed info for a single tool."""
+    from rich.console import Console
+    from rich.panel import Panel
+    from core.tools import ToolRegistry, register_builtin_tools
+    from core.tool_discovery import discover_shared_tools
+
+    console = Console()
+    registry = ToolRegistry()
+    register_builtin_tools(registry)
+    discover_shared_tools(registry)
+
+    tool = registry.get(name)
+    if not tool:
+        console.print(f"\n  [red]Tool '{name}' not found.[/]")
+        console.print(f"  [dim]Use 'alfred tools list' to see all available tools.[/]\n")
+        return
+
+    lines = []
+    lines.append(f"[bold cyan]{tool.name}[/]")
+    lines.append(f"")
+    lines.append(f"[bold]Description:[/] {tool.description}")
+    lines.append(f"[bold]Category:[/]    {tool.category or 'general'}")
+    lines.append(f"[bold]Source:[/]      {tool.source}")
+
+    if tool.version:
+        lines.append(f"[bold]Version:[/]     {tool.version}")
+    if tool.author:
+        lines.append(f"[bold]Author:[/]      {tool.author}")
+    if tool.file_path:
+        lines.append(f"[bold]File:[/]        {tool.file_path}")
+
+    if tool.parameters:
+        lines.append(f"")
+        lines.append(f"[bold]Parameters:[/]")
+        for p in tool.parameters:
+            req = " [red](required)[/]" if p.required else ""
+            lines.append(f"  • {p.name} [{p.type}]{req} — {p.description}")
+
+    console.print()
+    console.print(Panel("\n".join(lines), border_style="cyan", padding=(1, 2)))
+    console.print()
+
+
+def cmd_tool_install(target: str):
+    """Install a tool from URL or registry name."""
+    from rich.console import Console
+    from core.tool_registry import install_tool_from_url, install_tool_from_registry
+
+    console = Console()
+
+    if target.startswith("http://") or target.startswith("https://"):
+        console.print(f"\n  Installing from URL...")
+        ok, msg = install_tool_from_url(target)
+    else:
+        console.print(f"\n  Installing '{target}' from registry...")
+        ok, msg = install_tool_from_registry(target)
+
+    if ok:
+        console.print(f"  [green]✓[/] {msg}")
+    else:
+        console.print(f"  [red]✗[/] {msg}")
+    console.print()
+
+
+def cmd_tool_create(name: str, workspace: str = None):
+    """Scaffold a new tool file."""
+    from rich.console import Console
+    from core.tool_registry import create_tool_scaffold
+
+    console = Console()
+    ok, msg = create_tool_scaffold(name, workspace=workspace)
+
+    if ok:
+        console.print(f"\n  [green]✓[/] {msg}")
+        console.print(f"  [dim]Edit the file to implement your tool, then restart Alfred to load it.[/]")
+    else:
+        console.print(f"\n  [red]✗[/] {msg}")
+    console.print()
+
+
+def cmd_tool_search(query: str):
+    """Search the remote tool registry."""
+    from rich.console import Console
+    from rich.table import Table
+    from rich import box
+    from core.tool_registry import fetch_registry_index
+
+    console = Console()
+    console.print(f"\n  Searching registry for '{query}'...")
+
+    index = fetch_registry_index()
+    tools = index.get("tools", [])
+
+    if not tools:
+        console.print(f"  [dim]Registry is empty or unreachable.[/]\n")
+        return
+
+    # Filter by query (match name or description)
+    query_lower = query.lower()
+    matches = [
+        t for t in tools
+        if query_lower in t.get("name", "").lower()
+        or query_lower in t.get("description", "").lower()
+        or query_lower in " ".join(t.get("tags", [])).lower()
+    ]
+
+    if not matches:
+        console.print(f"  [dim]No tools found matching '{query}'.[/]\n")
+        return
+
+    table = Table(box=box.ROUNDED, title="Registry Results", title_style="bold cyan")
+    table.add_column("Name", style="bold cyan")
+    table.add_column("Version")
+    table.add_column("Author")
+    table.add_column("Description")
+
+    for t in matches:
+        desc = t.get("description", "")
+        if len(desc) > 50:
+            desc = desc[:47] + "..."
+        table.add_row(
+            t.get("name", ""),
+            t.get("version", ""),
+            t.get("author", ""),
+            desc,
+        )
+
+    console.print(table)
+    console.print(f"\n  [dim]Install with: alfred tool install <name>[/]\n")
+
+
+def cmd_tool_remove(name: str):
+    """Remove a community-installed tool."""
+    from rich.console import Console
+    from core.tool_registry import remove_tool
+
+    console = Console()
+    ok, msg = remove_tool(name)
+
+    if ok:
+        console.print(f"\n  [green]✓[/] {msg}")
+    else:
+        console.print(f"\n  [red]✗[/] {msg}")
+    console.print()
+
+
 # ─── Discord Commands ─────────────────────────────────────────────
 
 def _discord_discover(token: str, guild_id: str = None) -> dict:
@@ -2930,9 +3116,15 @@ def main():
 
         if subcmd == "create":
             if len(sys.argv) < 4:
-                print("Usage: alfred agent create <name>")
+                print("Usage: alfred agent create <name> [--template <archetype>]")
                 return
-            cmd_agent_create(sys.argv[3])
+            # Parse --template flag
+            tpl_name = None
+            args = sys.argv[4:]
+            for i, arg in enumerate(args):
+                if arg == "--template" and i + 1 < len(args):
+                    tpl_name = args[i + 1]
+            cmd_agent_create(sys.argv[3], template_name=tpl_name)
 
         elif subcmd == "list":
             cmd_agent_list()
@@ -3077,7 +3269,7 @@ def main():
             print("Available: add, list, remove")
         return
 
-    # Handle 'tools' subcommands
+    # Handle 'tools' subcommands (legacy — lists registered tools)
     if command == "tools":
         if len(sys.argv) < 3:
             print("Usage: alfred tools list [agent_name]")
@@ -3090,6 +3282,58 @@ def main():
         else:
             print(f"Unknown tools command: {subcmd}")
             print("Available: list")
+        return
+
+    # Handle 'tool' subcommands (registry — install, create, search, remove)
+    if command == "tool":
+        if len(sys.argv) < 3:
+            print("Usage: alfred tool <list|info|install|create|search|remove> [args]")
+            return
+
+        subcmd = sys.argv[2].lower()
+
+        if subcmd == "list":
+            agent_name = sys.argv[3] if len(sys.argv) > 3 else None
+            cmd_tools_list(agent_name)
+
+        elif subcmd == "info":
+            if len(sys.argv) < 4:
+                print("Usage: alfred tool info <name>")
+                return
+            cmd_tool_info(sys.argv[3])
+
+        elif subcmd == "install":
+            if len(sys.argv) < 4:
+                print("Usage: alfred tool install <name|url>")
+                return
+            cmd_tool_install(sys.argv[3])
+
+        elif subcmd == "create":
+            if len(sys.argv) < 4:
+                print("Usage: alfred tool create <name> [--workspace <path>]")
+                return
+            ws = None
+            args = sys.argv[4:]
+            for i, arg in enumerate(args):
+                if arg == "--workspace" and i + 1 < len(args):
+                    ws = args[i + 1]
+            cmd_tool_create(sys.argv[3], workspace=ws)
+
+        elif subcmd == "search":
+            if len(sys.argv) < 4:
+                print("Usage: alfred tool search <query>")
+                return
+            cmd_tool_search(sys.argv[3])
+
+        elif subcmd == "remove":
+            if len(sys.argv) < 4:
+                print("Usage: alfred tool remove <name>")
+                return
+            cmd_tool_remove(sys.argv[3])
+
+        else:
+            print(f"Unknown tool command: {subcmd}")
+            print("Available: list, info, install, create, search, remove")
         return
 
     # Handle 'models' subcommands

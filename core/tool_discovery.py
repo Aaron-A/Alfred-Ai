@@ -92,8 +92,20 @@ def _discover_tools_from_dir(registry: ToolRegistry, tools_dir: Path, source: st
 
             # Call register(registry) if it exists
             if hasattr(module, "register") and callable(module.register):
+                # Snapshot tool names before registration
+                before = set(registry.names())
                 module.register(registry)
                 loaded.append(py_file.name)
+
+                # Apply TOOL_META metadata if present
+                if hasattr(module, "TOOL_META"):
+                    meta = module.TOOL_META
+                    new_tools = set(registry.names()) - before
+                    for tool_name in new_tools:
+                        tool = registry.get(tool_name)
+                        if tool:
+                            tool.version = meta.get("version", "")
+                            tool.author = meta.get("author", "")
             else:
                 logger.warning(f"{py_file.name} has no register() function — tool will NOT be available. "
                              f"Add: def register(registry: ToolRegistry): ...")

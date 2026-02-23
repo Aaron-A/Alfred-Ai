@@ -35,9 +35,11 @@ class Tool:
     parameters: list[ToolParameter] = field(default_factory=list)
     execute: Callable = None
     category: str = ""  # e.g., "trading", "social", "search", "memory"
-    source: str = "builtin"  # "builtin", "shared", "workspace"
+    source: str = "builtin"  # "builtin", "shared", "workspace", "community"
     file_path: str = ""  # Path to the .py file that defines this tool
     dependencies: list[str] = field(default_factory=list)  # pip packages needed
+    version: str = ""  # Semver string (e.g., "1.0.0")
+    author: str = ""  # Tool author
 
     def to_schema(self) -> dict:
         """Convert to LLM-compatible tool schema (OpenAI function calling format)."""

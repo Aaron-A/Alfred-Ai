@@ -510,8 +510,21 @@ def create_default_agent(config_data: dict, user_name: str = ""):
         console.print()
         return
 
-    console.print("  Creating your default agent: [bold cyan]Alfred[/]")
-    console.print("  [dim]He'll be available in all channels unless you assign a specialist.[/]")
+    # Template selection
+    from core.templates import TEMPLATES
+
+    console.print("  Choose a personality for your default agent:\n")
+    tpl_list = list(TEMPLATES.values())
+    for i, t in enumerate(tpl_list, 1):
+        default_tag = " [dim](default)[/]" if t.name == "general" else ""
+        console.print(f"    [cyan]{i}.[/] {t.display_name}{default_tag} — {t.description}")
+
+    choice = Prompt.ask("\n  Select archetype", default="1")
+    idx = int(choice) - 1 if choice.isdigit() else 0
+    idx = max(0, min(idx, len(tpl_list) - 1))
+    template = tpl_list[idx]
+
+    console.print(f"  ✓ Template: [bold]{template.display_name}[/]")
     console.print()
 
     # Build registry for TOOLS.md generation
@@ -531,6 +544,7 @@ def create_default_agent(config_data: dict, user_name: str = ""):
     created = create_workspace(
         workspace_path, "Alfred",
         registry=registry,
+        template=template,
         creator=user_name,
         birthday=birthday_human,
         user_name=user_name,
@@ -550,7 +564,12 @@ def create_default_agent(config_data: dict, user_name: str = ""):
         "status": "active",
         "birthday": birthday_iso,
         "creator": user_name,
+        "template": template.name,
+        "temperature": template.temperature,
+        "max_tool_rounds": template.max_tool_rounds,
     }
+    if template.tools_denied:
+        cfg["agents"]["alfred"]["tools_denied"] = template.tools_denied
     _save_config(cfg)
 
     console.print(f"\n  [green]✓[/] Agent [bold]Alfred[/] ready")

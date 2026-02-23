@@ -25,30 +25,36 @@ Alfred is a lightweight framework for building persistent AI agents. Each agent 
 
 ## Quick Start
 
+**One-line install** (clones, installs dependencies, symlinks):
 ```bash
-# Clone and install
+curl -sL https://raw.githubusercontent.com/Aaron-A/Alfred-Ai/main/install.sh | bash
+```
+
+Then run the setup wizard:
+```bash
+alfred setup                     # Configure LLM + create first agent
+alfred discord setup             # Connect to Discord
+alfred start                     # Start Alfred
+```
+
+<details>
+<summary>Manual install</summary>
+
+```bash
 git clone https://github.com/Aaron-A/Alfred-Ai.git
 cd Alfred-Ai
 uv sync                          # Creates venv + installs all dependencies
 uv sync --extra trading          # Include trading bot dependencies (optional)
-
-# Add the alfred command to your PATH
 sudo ln -sf "$(pwd)/alfred" /usr/local/bin/alfred
-
-# Run the setup wizard
 alfred setup
-
-# Connect to Discord
-alfred discord setup
-
-# Start Alfred
-alfred start
 ```
 
 > **Don't have uv?** Install it with `curl -LsSf https://astral.sh/uv/install.sh | sh`
 > or see [docs.astral.sh/uv](https://docs.astral.sh/uv/getting-started/installation/).
 >
 > **Prefer not to symlink?** Use `uv run alfred` instead of `alfred` for all commands.
+
+</details>
 
 The setup wizard walks you through:
 1. Configuring your LLM provider and API key
