@@ -492,7 +492,7 @@ svg { display: block; margin: 0 auto; }
     <g class="node-group" id="node-xmedia">
       <rect x="56" y="408" width="208" height="40" fill="#14532d" stroke="#166534"/>
       <text x="160" y="423" class="node-label">xmedia</text>
-      <text x="160" y="438" class="node-sublabel">X Manager  &middot;  Claude 4.5 Sonnet</text>
+      <text x="160" y="438" class="node-sublabel">X Manager  &middot;  Structured Mode</text>
     </g>
 
     <!-- Agent Framework down to Agents group -->
@@ -803,6 +803,138 @@ svg { display: block; margin: 0 auto; }
 </div>
 
 <!-- ═══════════════════════════════════════════════════════════
+     STRUCTURED EXECUTION FLOW
+     ═══════════════════════════════════════════════════════════ -->
+<div class="diagram-section">
+  <h2>Structured Execution Flow <span style="font-weight:400;letter-spacing:1px;font-size:9px;color:var(--text-dim);margin-left:8px">(SCHEDULED RUNS &middot; NO TOOL_USE)</span></h2>
+
+  <svg viewBox="0 0 900 520" style="width:100%;max-width:900px;height:auto;">
+    <defs>
+      <marker id="seq2-arrowhead" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto">
+        <path d="M0,0 L7,2.5 L0,5 Z" fill="#22c55e"/>
+      </marker>
+      <marker id="seq2-arrowhead-dashed" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto">
+        <path d="M0,0 L7,2.5 L0,5 Z" fill="#555"/>
+      </marker>
+      <marker id="seq2-arrowhead-purple" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto">
+        <path d="M0,0 L7,2.5 L0,5 Z" fill="#a855f7"/>
+      </marker>
+      <marker id="seq2-arrowhead-orange" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto">
+        <path d="M0,0 L7,2.5 L0,5 Z" fill="#f97316"/>
+      </marker>
+    </defs>
+
+    <!-- Participant boxes -->
+    <g class="node-group" id="node-seq2-scheduler">
+      <rect x="30" y="10" width="110" height="34" class="seq-participant-box"/>
+      <text x="85" y="30" class="seq-participant-label">Scheduler</text>
+    </g>
+    <g class="node-group" id="node-seq2-agent">
+      <rect x="210" y="10" width="100" height="34" class="seq-participant-box"/>
+      <text x="260" y="30" class="seq-participant-label">Agent</text>
+    </g>
+    <g class="node-group" id="node-seq2-llm">
+      <rect x="440" y="10" width="100" height="34" class="seq-participant-box"/>
+      <text x="490" y="30" class="seq-participant-label">LLM</text>
+    </g>
+    <g class="node-group" id="node-seq2-tools">
+      <rect x="650" y="10" width="100" height="34" class="seq-participant-box"/>
+      <text x="700" y="30" class="seq-participant-label">Tools</text>
+    </g>
+
+    <!-- Lifelines -->
+    <line x1="85"  y1="44" x2="85"  y2="500" class="seq-lifeline"/>
+    <line x1="260" y1="44" x2="260" y2="500" class="seq-lifeline"/>
+    <line x1="490" y1="44" x2="490" y2="500" class="seq-lifeline"/>
+    <line x1="700" y1="44" x2="700" y2="500" class="seq-lifeline"/>
+
+    <!-- Activation bars -->
+    <rect x="254" y="68"  width="12" height="400" class="seq-activation"/>
+    <rect x="484" y="120" width="12" height="60"  class="seq-activation"/>
+    <rect x="694" y="215" width="12" height="55"  class="seq-activation"/>
+    <rect x="484" y="310" width="12" height="60"  class="seq-activation"/>
+    <rect x="694" y="395" width="12" height="50"  class="seq-activation"/>
+
+    <!-- 1. Scheduler -> Agent: task -->
+    <line x1="85" y1="78" x2="254" y2="78" class="seq-arrow" stroke="#22c55e" marker-end="url(#seq2-arrowhead)"/>
+    <text x="170" y="70" class="seq-label" text-anchor="middle">scheduled task</text>
+
+    <!-- 2. Agent self: build system prompt -->
+    <path d="M266,95 L300,95 L300,108 L266,108" class="seq-arrow" stroke="#a855f7" fill="none" marker-end="url(#seq2-arrowhead-purple)"/>
+    <text x="310" y="99" class="seq-label" text-anchor="start">build system prompt</text>
+    <text x="310" y="112" class="seq-label" text-anchor="start" fill="#555">SOUL + AGENTS + USER + TOOLS.md (no schemas)</text>
+
+    <!-- PHASE 1 box -->
+    <rect x="230" y="118" width="290" height="72" rx="3" fill="none" stroke="#22c55e" stroke-width="1" stroke-dasharray="6,3"/>
+    <rect x="230" y="118" width="90" height="16" rx="0" ry="0" fill="#1a1a1a" stroke="#22c55e" stroke-width="1"/>
+    <text x="240" y="129" class="seq-label" fill="#22c55e" font-size="8" font-weight="600">PHASE 1</text>
+    <text x="328" y="129" class="seq-label" fill="#888" font-size="8">gather plan</text>
+
+    <!-- 3. Agent -> LLM: gather plan request -->
+    <line x1="266" y1="142" x2="484" y2="142" class="seq-arrow" stroke="#22c55e" marker-end="url(#seq2-arrowhead)"/>
+    <text x="375" y="134" class="seq-label" text-anchor="middle">task + "output JSON gather plan"</text>
+
+    <!-- 4. LLM -> Agent: JSON gather -->
+    <line x1="484" y1="168" x2="266" y2="168" class="seq-arrow seq-arrow-dashed" marker-end="url(#seq2-arrowhead-dashed)"/>
+    <text x="375" y="160" class="seq-label" text-anchor="middle">{"gather": [{"tool": "...", "params": {...}}]}</text>
+
+    <!-- PHASE 2 box -->
+    <rect x="230" y="198" width="500" height="82" rx="3" fill="none" stroke="#f97316" stroke-width="1" stroke-dasharray="6,3"/>
+    <rect x="230" y="198" width="90" height="16" rx="0" ry="0" fill="#1a1a1a" stroke="#f97316" stroke-width="1"/>
+    <text x="240" y="209" class="seq-label" fill="#f97316" font-size="8" font-weight="600">PHASE 2</text>
+    <text x="328" y="209" class="seq-label" fill="#888" font-size="8">execute gathers</text>
+
+    <!-- 5. Agent -> Tools: execute gathers -->
+    <line x1="266" y1="228" x2="694" y2="228" class="seq-arrow" stroke="#22c55e" marker-end="url(#seq2-arrowhead)"/>
+    <text x="480" y="220" class="seq-label" text-anchor="middle">execute gather tools (Python)</text>
+
+    <!-- 6. Tools -> Agent: results -->
+    <line x1="694" y1="258" x2="266" y2="258" class="seq-arrow seq-arrow-dashed" marker-end="url(#seq2-arrowhead-dashed)"/>
+    <text x="480" y="250" class="seq-label" text-anchor="middle">search results &middot; metrics &middot; context</text>
+
+    <!-- PHASE 3 box -->
+    <rect x="230" y="290" width="290" height="82" rx="3" fill="none" stroke="#22c55e" stroke-width="1" stroke-dasharray="6,3"/>
+    <rect x="230" y="290" width="90" height="16" rx="0" ry="0" fill="#1a1a1a" stroke="#22c55e" stroke-width="1"/>
+    <text x="240" y="301" class="seq-label" fill="#22c55e" font-size="8" font-weight="600">PHASE 3</text>
+    <text x="328" y="301" class="seq-label" fill="#888" font-size="8">compose actions</text>
+
+    <!-- 7. Agent -> LLM: compose with context -->
+    <line x1="266" y1="320" x2="484" y2="320" class="seq-arrow" stroke="#22c55e" marker-end="url(#seq2-arrowhead)"/>
+    <text x="375" y="312" class="seq-label" text-anchor="middle">task + gathered context</text>
+
+    <!-- 8. LLM -> Agent: JSON actions -->
+    <line x1="484" y1="355" x2="266" y2="355" class="seq-arrow seq-arrow-dashed" marker-end="url(#seq2-arrowhead-dashed)"/>
+    <text x="375" y="347" class="seq-label" text-anchor="middle">{"actions": [...], "summary": "..."}</text>
+
+    <!-- PHASE 4 box -->
+    <rect x="230" y="380" width="500" height="72" rx="3" fill="none" stroke="#f97316" stroke-width="1" stroke-dasharray="6,3"/>
+    <rect x="230" y="380" width="90" height="16" rx="0" ry="0" fill="#1a1a1a" stroke="#f97316" stroke-width="1"/>
+    <text x="240" y="391" class="seq-label" fill="#f97316" font-size="8" font-weight="600">PHASE 4</text>
+    <text x="328" y="391" class="seq-label" fill="#888" font-size="8">execute actions</text>
+
+    <!-- 9. Agent -> Tools: execute actions -->
+    <line x1="266" y1="410" x2="694" y2="410" class="seq-arrow" stroke="#22c55e" marker-end="url(#seq2-arrowhead)"/>
+    <text x="480" y="402" class="seq-label" text-anchor="middle">post tweets &middot; like &middot; store memory</text>
+
+    <!-- 10. Tools -> Agent: done -->
+    <line x1="694" y1="435" x2="266" y2="435" class="seq-arrow seq-arrow-dashed" marker-end="url(#seq2-arrowhead-dashed)"/>
+    <text x="480" y="427" class="seq-label" text-anchor="middle">execution results</text>
+
+    <!-- 11. Agent -> Scheduler: summary -->
+    <line x1="254" y1="470" x2="85" y2="470" class="seq-arrow seq-arrow-dashed" marker-end="url(#seq2-arrowhead-dashed)"/>
+    <text x="170" y="462" class="seq-label" text-anchor="middle">summary response</text>
+
+    <!-- Cost comparison annotation -->
+    <text x="770" y="120" class="seq-label" fill="#22c55e" font-size="9" font-weight="600">2 LLM calls</text>
+    <text x="770" y="133" class="seq-label" fill="#555" font-size="8">~10K tokens</text>
+    <text x="770" y="146" class="seq-label" fill="#555" font-size="8">0 tool schemas</text>
+    <text x="770" y="166" class="seq-label" fill="#555" font-size="8">vs tool_use loop:</text>
+    <text x="770" y="179" class="seq-label" fill="#ef4444" font-size="8">15 LLM calls</text>
+    <text x="770" y="192" class="seq-label" fill="#ef4444" font-size="8">~300K tokens</text>
+  </svg>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
      PROJECT STRUCTURE
      ═══════════════════════════════════════════════════════════ -->
 <div class="diagram-section">
@@ -903,6 +1035,14 @@ svg { display: block; margin: 0 auto; }
       <div class="tree-file"><span class="tree-desc">Agents create new tools at runtime via meta-tools (tool_create, tool_remove)</span></div>
     </div>
     <div class="tree-group">
+      <h3 class="clr-cyan">Structured Execution</h3>
+      <div class="tree-file"><span class="tree-desc">Scheduled runs bypass Anthropic tool_use entirely. LLM outputs JSON plans; Python executes tools directly. 2 LLM calls instead of 15. Zero tool schema overhead. Configurable per-agent via schedule_run_mode</span></div>
+    </div>
+    <div class="tree-group">
+      <h3 class="clr-cyan">Prompt Caching</h3>
+      <div class="tree-file"><span class="tree-desc">System prompt and tool schemas marked with cache_control for Anthropic's prefix caching. First round pays 1.25x, subsequent rounds read at 0.1x. 90% discount on static overhead across multi-round tool loops</span></div>
+    </div>
+    <div class="tree-group">
       <h3 class="clr-cyan">Cost-Aware</h3>
       <div class="tree-file"><span class="tree-desc">Per-model USD cost estimates from token counts. Tool results auto-summarized when &gt; 2K chars to save context. Daily cost alerts via Discord</span></div>
     </div>
@@ -984,7 +1124,7 @@ const NODE_DATA = {
     categoryColor: '#334155',
     desc: 'Built-in cron engine that runs tasks on configurable schedules. Results are automatically posted to the agent\'s Discord channel. Also runs weekly maintenance jobs (memory compaction).',
     files: ['core/scheduler.py'],
-    features: ['Cron expression scheduling', 'Manual trigger via API/dashboard', 'Retry logic (0-3 attempts)', 'Catchup for missed runs', 'Result history tracking', 'Per-schedule enable/disable', 'Weekly memory compaction maintenance', 'Configurable maintenance cron in alfred.json']
+    features: ['Cron expression scheduling', 'Structured run mode dispatch (schedule_run_mode config)', 'Manual trigger via API/dashboard', 'Retry logic (0-3 attempts)', 'Catchup for missed runs', 'Result history tracking', 'Per-schedule enable/disable', 'Weekly memory compaction maintenance', 'Configurable maintenance cron in alfred.json']
   },
   'node-agent-framework': {
     title: 'Agent Framework',
@@ -992,7 +1132,7 @@ const NODE_DATA = {
     categoryColor: '#3b82f6',
     desc: 'Central orchestration engine. Manages the full agent loop: receives input, recalls memories with smart relevance gating, builds system prompt, calls LLM, dispatches tool calls with auto-retry and result summarization, runs optional reflection, and persists sessions with cost tracking.',
     files: ['core/agent.py'],
-    features: ['Multi-turn tool loop with configurable max rounds', 'Smart auto-recall with relevance gating (distance < 0.4)', 'Tool result summarization for outputs > 2K chars', 'Auto-retry on transient errors (timeout, 429, 503) with backoff', 'Post-session reflection loop (opt-in) with confidence scoring', 'System prompt assembly from SOUL + AGENTS + USER + TOOLS + memories', 'Full tool chain persistence (prevents tool-call hallucination)', 'Turn-based session trimming with pre-compaction flush', 'Per-interaction cost estimation and alerting hooks']
+    features: ['Multi-turn tool loop with configurable max rounds', 'Structured execution mode: 2-phase JSON planning (no tool_use, no schemas)', 'Prompt caching: cache_control on system prompt + tool schemas (90% discount on rounds 2+)', 'Smart auto-recall with relevance gating (distance < 0.4)', 'Tool result summarization for outputs > 2K chars', 'Auto-retry on transient errors (timeout, 429, 503) with backoff', 'Post-session reflection loop (opt-in) with confidence scoring', 'System prompt assembly from SOUL + AGENTS + USER + TOOLS + memories', 'Full tool chain persistence (prevents tool-call hallucination)', 'Turn-based session trimming with pre-compaction flush', 'Per-interaction cost estimation and alerting hooks']
   },
   'node-config': {
     title: 'Config',
@@ -1038,9 +1178,9 @@ const NODE_DATA = {
     title: 'xmedia',
     category: 'Agent',
     categoryColor: '#22c55e',
-    desc: 'X/Twitter content manager. Drafts posts, manages engagement, and monitors the X API via OAuth 1.0a authentication.',
+    desc: 'X/Twitter content manager. Uses structured execution for scheduled runs \u2014 2 LLM calls instead of 15, zero tool schemas. Drafts posts, manages engagement, and monitors the X API.',
     files: ['workspaces/xmedia/SOUL.md'],
-    features: ['Tweet composition and posting', 'OAuth 1.0a authentication', 'Content scheduling', 'Engagement monitoring and replies']
+    features: ['Structured mode: gather\u2192compose\u2192execute pipeline', '12-tool allowlist (down from 31)', 'Tweet composition and posting', 'OAuth 1.0a authentication', 'Content scheduling', 'Engagement monitoring and replies']
   },
   'node-trading-bot': {
     title: 'BTC Trading Bot',
@@ -1225,7 +1365,7 @@ const NODE_DATA = {
     categoryColor: '#06b6d4',
     desc: 'The orchestrator for a single run. Recalls memories with smart relevance filtering, assembles the system prompt, dispatches tool calls with auto-retry and result summarization, runs optional reflection, and persists the session with cost tracking.',
     files: ['core/agent.py'],
-    features: ['Smart auto-recall with relevance gating (distance < 0.4)', 'Importance-boosted memory search results', 'Tool result summarization (compress > 2K char outputs)', 'Auto-retry on transient errors with exponential backoff', 'Post-session reflection loop (evaluates own performance)', 'System prompt assembly from SOUL + AGENTS + USER + TOOLS + memories', 'Session persistence with full tool chain', 'Per-interaction cost estimation', 'Error alerting via Discord webhooks']
+    features: ['Structured execution: 2-phase JSON output for scheduled runs (no tool_use overhead)', 'Smart auto-recall with relevance gating (distance < 0.4)', 'Importance-boosted memory search results', 'Tool result summarization (compress > 2K char outputs)', 'Auto-retry on transient errors with exponential backoff', 'Post-session reflection loop (evaluates own performance)', 'System prompt assembly from SOUL + AGENTS + USER + TOOLS + memories', 'Session persistence with full tool chain', 'Per-interaction cost estimation', 'Error alerting via Discord webhooks']
   },
   'node-seq-memory': {
     title: 'Memory',
@@ -1239,9 +1379,9 @@ const NODE_DATA = {
     title: 'LLM',
     category: 'Execution Flow',
     categoryColor: '#06b6d4',
-    desc: 'The language model that powers agent reasoning. Receives the assembled system prompt, conversation history, and tool definitions. Returns either a text response (final answer) or tool_use blocks requesting tool execution. Runs in a loop until it produces a final text response or hits max rounds.',
+    desc: 'The language model that powers agent reasoning. In tool_use mode: receives system prompt, history, and tool schemas, returns tool_use blocks or text. In structured mode: receives plain text and returns JSON plans instead of tool_use blocks.',
     files: ['core/llm.py', 'core/models.py'],
-    features: ['Anthropic native API with prompt caching', 'OpenAI-compatible mode for xAI, OpenAI, Ollama', 'Tool schema auto-conversion between provider formats', 'Returns tool_use blocks or final text response', 'Token usage tracking (input + output) per call', 'Temperature and max_tokens per-agent config', 'Primary/secondary provider fallback']
+    features: ['Prompt caching with cache_control (90% token cost reduction on static content)', 'Anthropic native API with system prompt caching', 'OpenAI-compatible mode for xAI, OpenAI, Ollama', 'Tool schema auto-conversion between provider formats', 'Returns tool_use blocks or final text response', 'Token usage tracking (input + output) per call', 'Temperature and max_tokens per-agent config', 'Primary/secondary provider fallback']
   },
   'node-seq-tool': {
     title: 'Tool',
@@ -1257,7 +1397,7 @@ const NODE_DATA = {
     categoryColor: '#666',
     desc: 'Central configuration file (gitignored). Defines everything: LLM providers, agent definitions with self-learning config, service credentials, schedules, Discord mappings, alert rules, and maintenance settings.',
     files: ['alfred.json'],
-    features: ['Provider API keys and model defaults', 'Agent definitions with per-agent overrides', 'Self-learning config: reflection_enabled, summarize_tool_results, auto_recall_threshold', 'Alert rules: error rate, daily cost, bot crash thresholds', 'Service credentials with domain mapping', 'Cron schedule definitions', 'Maintenance settings (weekly memory compaction)', 'Discord channel-to-agent routing', 'Hot-reload via daemon SIGHUP']
+    features: ['Provider API keys and model defaults', 'Agent definitions with per-agent overrides', 'schedule_run_mode: tool_use or structured (per-agent)', 'Per-agent tool allowlist for schema reduction', 'Self-learning config: reflection_enabled, summarize_tool_results, auto_recall_threshold', 'Alert rules: error rate, daily cost, bot crash thresholds', 'Service credentials with domain mapping', 'Cron schedule definitions', 'Maintenance settings (weekly memory compaction)', 'Discord channel-to-agent routing', 'Hot-reload via daemon SIGHUP']
   }
 };
 
