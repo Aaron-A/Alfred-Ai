@@ -115,6 +115,10 @@ Commands:
 
     api start [--port PORT]             Start API only — dev mode (default: 7700)
 
+    migrate <path>                     Move Alfred to a new directory
+    export [file]                      Export config + data for migration
+    import <file>                      Import config + data into this install
+
     demo                                Run the memory layer demo
 
 Examples:
@@ -3099,6 +3103,255 @@ def cmd_discord_channel_list():
     console.print()
 
 
+# ─── Migration Commands ──────────────────────────────────────────
+
+def cmd_migrate(target_path: str):
+    """Move Alfred to a new directory on the same machine."""
+    import shutil
+    import subprocess
+    from pathlib import Path
+
+    project_root = Path(__file__).parent.resolve()
+    target = Path(target_path).resolve()
+
+    if target == project_root:
+        print("  ✗ Target is the same as current location.")
+        return
+
+    if target.exists() and any(target.iterdir()):
+        print(f"  ✗ Target directory is not empty: {target}")
+        return
+
+    print(f"\n  Moving Alfred to: {target}\n")
+
+    # Stop Alfred if running
+    pid_file = project_root / "data" / "alfred.pid"
+    if pid_file.exists():
+        print("  ⟳ Stopping Alfred...")
+        subprocess.run([sys.executable, str(project_root / "__main__.py"), "stop"], cwd=str(project_root))
+        print("  ✓ Stopped")
+
+    # rsync the project, excluding venvs and caches
+    print("  ⟳ Copying files...")
+    excludes = [
+        "--exclude", ".venv/",
+        "--exclude", "venv/",
+        "--exclude", "*/bot/venv/",
+        "--exclude", "__pycache__/",
+        "--exclude", "*.pyc",
+    ]
+    result = subprocess.run(
+        ["rsync", "-a"] + excludes + [str(project_root) + "/", str(target) + "/"],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        print(f"  ✗ Copy failed: {result.stderr}")
+        return
+    print(f"  ✓ Copied to {target}")
+
+    # Rebuild .venv in the new location
+    print("  ⟳ Rebuilding virtual environment...")
+    uv_bin = shutil.which("uv") or os.path.expanduser("~/.local/bin/uv")
+    result = subprocess.run(
+        [uv_bin, "sync", "--all-extras"],
+        cwd=str(target), capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        print(f"  ⚠  venv rebuild had issues: {result.stderr[:200]}")
+    else:
+        print("  ✓ Virtual environment rebuilt")
+
+    # Rebuild bot venvs if they exist
+    for bot_dir in target.glob("workspaces/*/bot"):
+        req_file = bot_dir / "requirements.txt"
+        if req_file.exists():
+            print(f"  ⟳ Rebuilding bot venv: {bot_dir.name}...")
+            subprocess.run(
+                [sys.executable, "-m", "venv", str(bot_dir / "venv")],
+                capture_output=True,
+            )
+            subprocess.run(
+                [str(bot_dir / "venv" / "bin" / "pip"), "install", "-q", "-r", str(req_file)],
+                capture_output=True,
+            )
+            print(f"  ✓ Bot venv rebuilt: {bot_dir.parent.name}")
+
+    # Update symlink
+    symlink_path = Path("/usr/local/bin/alfred")
+    print("  ⟳ Updating CLI symlink...")
+    result = subprocess.run(
+        ["sudo", "ln", "-sf", str(target / "alfred"), str(symlink_path)],
+        capture_output=True, text=True,
+    )
+    if result.returncode == 0:
+        print(f"  ✓ Symlink updated: alfred → {target / 'alfred'}")
+    else:
+        print(f"  ⚠  Could not update symlink (no sudo). Run manually:")
+        print(f"     sudo ln -sf {target}/alfred /usr/local/bin/alfred")
+
+    print(f"\n  ╭──────────────────────────────────────╮")
+    print(f"  │        Migration complete!            │")
+    print(f"  ╰──────────────────────────────────────╯")
+    print(f"\n  New location: {target}")
+    print(f"  Start with:   alfred start\n")
+
+
+def cmd_export(filename: str | None = None):
+    """Export config + data for cross-machine migration."""
+    import subprocess
+    from datetime import datetime
+    from pathlib import Path
+
+    project_root = Path(__file__).parent.resolve()
+
+    if not filename:
+        today = datetime.now().strftime("%Y-%m-%d")
+        filename = f"alfred-export-{today}.tar.gz"
+
+    export_path = Path(filename).resolve()
+
+    print(f"\n  Exporting Alfred data...\n")
+
+    # Build the list of paths to include (relative to project root)
+    includes = []
+    for item in ["alfred.json", ".env", "workspaces", "data"]:
+        if (project_root / item).exists():
+            includes.append(item)
+
+    if not includes:
+        print("  ✗ Nothing to export (no alfred.json, workspaces, or data found)")
+        return
+
+    # Build tar command with exclusions
+    excludes = [
+        "--exclude", "*/venv",
+        "--exclude", "*/venv/*",
+        "--exclude", "*/__pycache__",
+        "--exclude", "*/__pycache__/*",
+        "--exclude", "*.pyc",
+        "--exclude", "data/models/*",
+    ]
+
+    result = subprocess.run(
+        ["tar", "-czf", str(export_path)] + excludes + ["-C", str(project_root)] + includes,
+        capture_output=True, text=True,
+    )
+
+    if result.returncode != 0:
+        print(f"  ✗ Export failed: {result.stderr}")
+        return
+
+    # Show file size
+    size_bytes = export_path.stat().st_size
+    if size_bytes > 1_048_576:
+        size_str = f"{size_bytes / 1_048_576:.1f} MB"
+    elif size_bytes > 1024:
+        size_str = f"{size_bytes / 1024:.1f} KB"
+    else:
+        size_str = f"{size_bytes} bytes"
+
+    print(f"  ✓ Exported to: {export_path} ({size_str})")
+    print(f"\n  Contents: {', '.join(includes)}")
+    print(f"\n  To restore on a new machine:")
+    print(f"    1. git clone https://github.com/Aaron-A/Alfred-Ai.git")
+    print(f"    2. cd Alfred-Ai")
+    print(f"    3. alfred import {export_path.name}")
+    print(f"    4. alfred start\n")
+
+
+def cmd_import(filename: str):
+    """Import config + data from an export archive."""
+    import shutil
+    import subprocess
+    from pathlib import Path
+
+    project_root = Path(__file__).parent.resolve()
+    archive = Path(filename).resolve()
+
+    if not archive.exists():
+        print(f"  ✗ File not found: {archive}")
+        return
+
+    # Verify we're in a valid Alfred installation
+    if not (project_root / "__main__.py").exists():
+        print("  ✗ Not in an Alfred installation directory.")
+        return
+
+    # Warn if alfred.json already exists
+    if (project_root / "alfred.json").exists():
+        print("  ⚠  alfred.json already exists in this installation.")
+        response = input("  Overwrite with imported config? (y/N) ").strip().lower()
+        if response != "y":
+            print("  Cancelled.")
+            return
+
+    print(f"\n  Importing from: {archive}\n")
+
+    # List contents first
+    result = subprocess.run(
+        ["tar", "-tzf", str(archive)],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        print(f"  ✗ Cannot read archive: {result.stderr}")
+        return
+
+    # Extract into project root
+    result = subprocess.run(
+        ["tar", "-xzf", str(archive), "-C", str(project_root)],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        print(f"  ✗ Import failed: {result.stderr}")
+        return
+
+    print("  ✓ Files extracted")
+
+    # Rebuild venv to ensure deps match
+    print("  ⟳ Rebuilding virtual environment...")
+    uv_bin = shutil.which("uv") or os.path.expanduser("~/.local/bin/uv")
+    result = subprocess.run(
+        [uv_bin, "sync", "--all-extras"],
+        cwd=str(project_root), capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        print(f"  ⚠  venv rebuild had issues: {result.stderr[:200]}")
+    else:
+        print("  ✓ Virtual environment rebuilt")
+
+    # Rebuild bot venvs if they exist
+    for bot_dir in project_root.glob("workspaces/*/bot"):
+        req_file = bot_dir / "requirements.txt"
+        if req_file.exists():
+            print(f"  ⟳ Rebuilding bot venv: {bot_dir.parent.name}...")
+            subprocess.run(
+                [sys.executable, "-m", "venv", str(bot_dir / "venv")],
+                capture_output=True,
+            )
+            subprocess.run(
+                [str(bot_dir / "venv" / "bin" / "pip"), "install", "-q", "-r", str(req_file)],
+                capture_output=True,
+            )
+            print(f"  ✓ Bot venv rebuilt: {bot_dir.parent.name}")
+
+    # Ensure data directories exist
+    (project_root / "data").mkdir(exist_ok=True)
+    (project_root / "data" / "lancedb").mkdir(exist_ok=True)
+    (project_root / "data" / "models").mkdir(exist_ok=True)
+
+    agents = []
+    workspaces_dir = project_root / "workspaces"
+    if workspaces_dir.exists():
+        agents = [d.name for d in workspaces_dir.iterdir() if d.is_dir()]
+
+    print(f"\n  ╭──────────────────────────────────────╮")
+    print(f"  │          Import complete!             │")
+    print(f"  ╰──────────────────────────────────────╯")
+    if agents:
+        print(f"\n  Agents found: {', '.join(agents)}")
+    print(f"\n  Next: alfred start\n")
+
+
 # ─── Main Router ─────────────────────────────────────────────────
 
 def main():
@@ -3503,6 +3756,28 @@ def main():
         else:
             print(f"Unknown session command: {subcmd}")
             print("Available: list, view, export, delete")
+        return
+
+    # Handle 'migrate' command
+    if command == "migrate":
+        if len(sys.argv) < 3:
+            print("Usage: alfred migrate <target-path>")
+            return
+        cmd_migrate(sys.argv[2])
+        return
+
+    # Handle 'export' command
+    if command == "export":
+        filename = sys.argv[2] if len(sys.argv) > 2 else None
+        cmd_export(filename)
+        return
+
+    # Handle 'import' command
+    if command == "import":
+        if len(sys.argv) < 3:
+            print("Usage: alfred import <archive-file>")
+            return
+        cmd_import(sys.argv[2])
         return
 
     commands = {

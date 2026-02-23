@@ -122,6 +122,10 @@ alfred discord status           Show Discord channel mappings
 
 alfred api start               Start API only — dev mode (port 7700)
 alfred api start --port 8080   Start on custom port
+
+alfred migrate <path>          Move Alfred to a new directory
+alfred export [file]           Export config + data for migration
+alfred import <file>           Import config + data into this install
 ```
 
 </details>

@@ -21,6 +21,7 @@ All notable changes to Alfred AI will be documented in this file.
 - Tool management CLI: `alfred tool info/install/create/search/remove`
 - Service management CLI: `alfred service add/list/remove`
 - One-line install script (`install.sh`)
+- Migration CLI: `alfred migrate`, `alfred export`, `alfred import` for moving between directories or machines
 
 ## [0.1.0] - 2026-02-22
 
