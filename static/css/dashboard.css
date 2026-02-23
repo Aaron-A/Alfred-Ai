@@ -796,7 +796,7 @@ body {
 }
 .structured-note {
   font-size: 11px;
-  color: var(--muted);
+  color: var(--text-muted);
 }
 body.light-theme .modal-structured-badge {
   background: rgba(0, 128, 64, 0.06);

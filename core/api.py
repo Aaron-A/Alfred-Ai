@@ -1116,6 +1116,7 @@ def create_app() -> FastAPI:
         max_daily_cost: Optional[float] = None
         context_budget_pct: Optional[float] = None
         schedule_max_tool_rounds: Optional[int] = None
+        schedule_run_mode: Optional[str] = None
         temperature: Optional[float] = None
 
     @app.patch("/v1/agents/{name}/config")
@@ -1164,6 +1165,10 @@ def create_app() -> FastAPI:
             agents_cfg[name]["schedule_max_tool_rounds"] = max(1, min(50, update.schedule_max_tool_rounds))
         if update.temperature is not None:
             agents_cfg[name]["temperature"] = max(0, min(2, update.temperature))
+        if update.schedule_run_mode is not None:
+            if update.schedule_run_mode not in ("tool_use", "structured"):
+                raise HTTPException(status_code=400, detail="schedule_run_mode must be 'tool_use' or 'structured'")
+            agents_cfg[name]["schedule_run_mode"] = update.schedule_run_mode
 
         cfg["agents"] = agents_cfg
         _save_config(cfg)
