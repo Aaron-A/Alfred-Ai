@@ -1398,6 +1398,39 @@ const NODE_DATA = {
     desc: 'Central configuration file (gitignored). Defines everything: LLM providers, agent definitions with self-learning config, service credentials, schedules, Discord mappings, alert rules, and maintenance settings.',
     files: ['alfred.json'],
     features: ['Provider API keys and model defaults', 'Agent definitions with per-agent overrides', 'schedule_run_mode: tool_use or structured (per-agent)', 'Per-agent tool allowlist for schema reduction', 'Self-learning config: reflection_enabled, summarize_tool_results, auto_recall_threshold', 'Alert rules: error rate, daily cost, bot crash thresholds', 'Service credentials with domain mapping', 'Cron schedule definitions', 'Maintenance settings (weekly memory compaction)', 'Discord channel-to-agent routing', 'Hot-reload via daemon SIGHUP']
+  },
+  // ── Structured Execution Flow Participants ──
+  'node-seq2-scheduler': {
+    title: 'Scheduler',
+    category: 'Structured Execution',
+    categoryColor: '#a855f7',
+    desc: 'Detects schedule_run_mode: "structured" on the agent config and injects {"structured": true, "scheduled": true} into the run context. Skips the tool-round cap that normally limits scheduled runs. After the structured run completes, triggers session snapshot and daily log append.',
+    files: ['__main__.py', 'core/scheduler.py'],
+    features: ['Cron trigger with structured context injection', 'Tool-round cap bypass for structured mode', 'Session snapshot saved after each scheduled run', 'Daily log auto-appended after run completion']
+  },
+  'node-seq2-agent': {
+    title: 'Agent',
+    category: 'Structured Execution',
+    categoryColor: '#a855f7',
+    desc: 'Runs _run_structured() which makes exactly 2 LLM calls: one gather phase (data collection) and one action phase (decisions). Both return JSON plans that Python executes directly. No tool_use protocol, no tool schemas sent. Reduces a typical scheduled run from ~150K tokens to ~15K tokens.',
+    files: ['core/agent.py'],
+    features: ['2-phase JSON planning: gather then act', 'No tool_use protocol overhead', 'Python-direct tool execution from JSON plans', 'Result cap via tool_result_max_chars * 2', 'Reflection disabled for structured runs']
+  },
+  'node-seq2-llm': {
+    title: 'LLM',
+    category: 'Structured Execution',
+    categoryColor: '#a855f7',
+    desc: 'In structured mode the LLM receives plain text (system prompt + task) with no tool schemas, saving ~16K tokens per call. Returns JSON with tool names and arguments instead of tool_use blocks. Exactly 2 calls total versus 10-15 in the standard tool_use loop.',
+    files: ['core/llm.py'],
+    features: ['No tool schemas sent (saves ~16K tokens per call)', 'JSON output instead of tool_use blocks', '2 calls total vs 10-15 in standard mode', 'Same provider and model as standard mode']
+  },
+  'node-seq2-tools': {
+    title: 'Tools',
+    category: 'Structured Execution',
+    categoryColor: '#a855f7',
+    desc: 'Tools are executed directly by Python from the JSON plan rather than via the LLM tool_use round-trip. The agent iterates the JSON array, resolves each tool by name, calls it with the provided arguments, and collects results for the next phase.',
+    files: ['core/agent.py', 'core/tools.py'],
+    features: ['Python-executed from JSON plans (no LLM round-trip)', 'No tool_use overhead per invocation', 'Same tool functions as standard mode', 'Results fed back as context for action phase']
   }
 };
 
