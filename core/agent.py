@@ -727,6 +727,24 @@ class Agent:
             f"{before_chars} -> {after_chars} chars ({100 - int(after_chars/max(before_chars,1)*100)}% reduction)"
         )
 
+        # Persist compaction summary to vector memory (write-ahead log pattern).
+        # Without this, mid-run summaries only live in the conversation and are
+        # lost if the session later trims.  Follows _flush_expiring_context().
+        if self.memory and self.config.pre_compaction_flush and condensed:
+            try:
+                from models.base import MemoryRecord
+                record = MemoryRecord(
+                    content=f"Mid-run compaction ({len(old_rounds)} rounds): {condensed[:2000]}",
+                    memory_type="context_flush",
+                    tags="auto,mid-run-compaction,context-guard",
+                    agent_id=self.config.name,
+                    source="mid_run_compaction",
+                )
+                self.memory.store(record, dedup=False)
+                logger.debug(f"{self.config.name}: mid-run compaction saved to vector memory")
+            except Exception as e:
+                logger.debug(f"{self.config.name}: mid-run compaction memory store failed (non-fatal): {e}")
+
         return compacted
 
     def _llm_compact_summary(self, text: str) -> str | None:
@@ -1023,6 +1041,137 @@ class Agent:
             # Flush is best-effort — never crash the agent over it
             logger.warning(f"{self.config.name}: pre-compaction flush failed (non-fatal): {e}")
 
+    # ─── Daily Log & Session Snapshots ────────────────────────
+
+    def _append_daily_log(self, task: str, response: str, tool_call_count: int,
+                          new_messages: list[dict], elapsed_ms: int,
+                          input_tokens: int, output_tokens: int,
+                          is_scheduled: bool = False):
+        """
+        Append a structured entry to today's daily log file.
+
+        No LLM call — uses raw structured data.  Best-effort (never crashes).
+        Path: {workspace}/memory/YYYY-MM-DD.md
+        """
+        try:
+            from .config import config as _config
+            now = datetime.now(_config.tz)
+            today = now.strftime("%Y-%m-%d")
+            memory_dir = self.workspace / "memory"
+            memory_dir.mkdir(exist_ok=True)
+            log_file = memory_dir / f"{today}.md"
+
+            # Cap file size — prevents runaway growth on high-frequency agents
+            if log_file.exists() and log_file.stat().st_size > 50_000:
+                logger.debug(f"{self.config.name}: daily log capped at 50KB, skipping append")
+                return
+
+            # Extract tool names from new_messages
+            tool_names = []
+            for msg in new_messages:
+                content = msg.get("content", "")
+                if isinstance(content, list):
+                    for block in content:
+                        if isinstance(block, dict) and block.get("type") == "tool_use":
+                            tool_names.append(block.get("name", "?"))
+
+            # Build the entry (NO LLM call — just structured facts)
+            time_str = now.strftime("%H:%M")
+            source = "scheduled" if is_scheduled else "interactive"
+
+            lines = []
+            lines.append(f"### {time_str} — {source}")
+            lines.append(f"**Task:** {task[:200]}")
+            if tool_names:
+                from collections import Counter
+                counts = Counter(tool_names)
+                tool_summary = ", ".join(
+                    f"{name}({c})" if c > 1 else name for name, c in counts.items()
+                )
+                lines.append(f"**Tools:** {tool_summary}")
+            lines.append(f"**Result:** {response[:300]}")
+            lines.append(f"*{tool_call_count} calls, {input_tokens}+{output_tokens} tok, {elapsed_ms}ms*")
+            lines.append("")
+
+            entry = "\n".join(lines) + "\n"
+
+            # Append to file — add date header if new
+            is_new = not log_file.exists() or log_file.stat().st_size == 0
+            with open(log_file, "a") as f:
+                if is_new:
+                    f.write(f"# {self.config.name} — {today}\n\n")
+                f.write(entry)
+
+        except Exception as e:
+            logger.debug(f"{self.config.name}: daily log write failed (non-fatal): {e}")
+
+    def _save_session_snapshot(self, messages: list[dict] = None, max_messages: int = 15):
+        """
+        Save a snapshot of the current conversation to a markdown file.
+
+        Filters to user + assistant text messages only (no tool calls).
+        Stores as: {workspace}/memory/sessions/YYYY-MM-DD_HH-MM_{slug}.md
+        Auto-prunes to last 20 snapshots.  Best-effort (never crashes).
+        """
+        try:
+            msgs = messages or self.history
+            if not msgs:
+                return
+
+            # Filter to meaningful messages: user/assistant with string content
+            meaningful = []
+            for m in msgs:
+                role = m.get("role")
+                content = m.get("content", "")
+                if role in ("user", "assistant") and isinstance(content, str) and content.strip():
+                    meaningful.append(m)
+
+            if len(meaningful) < 2:
+                return  # Not enough to snapshot
+
+            meaningful = meaningful[-max_messages:]
+
+            # Generate slug from first user message
+            first_user = next(
+                (m["content"] for m in meaningful if m["role"] == "user"), "session"
+            )
+            import re
+            slug = re.sub(r'[^a-z0-9\s]', '', first_user[:60].lower()).strip()
+            slug = re.sub(r'\s+', '-', slug)[:40] or "session"
+
+            from .config import config as _config
+            now = datetime.now(_config.tz)
+            filename = f"{now.strftime('%Y-%m-%d_%H-%M')}_{slug}.md"
+
+            sessions_dir = self.workspace / "memory" / "sessions"
+            sessions_dir.mkdir(parents=True, exist_ok=True)
+
+            # Build markdown
+            lines = [
+                f"# Session Snapshot: {self.config.name}",
+                f"**Date:** {now.strftime('%Y-%m-%d %H:%M')}",
+                f"**Messages:** {len(meaningful)}",
+                "", "---", "",
+            ]
+            for m in meaningful:
+                role_label = "User" if m["role"] == "user" else self.config.name.title()
+                lines.append(f"### {role_label}")
+                lines.append(m["content"][:1000])
+                lines.append("")
+
+            snapshot_file = sessions_dir / filename
+            snapshot_file.write_text("\n".join(lines))
+
+            # Prune old snapshots — keep only last 20
+            existing = sorted(sessions_dir.glob("*.md"), key=lambda p: p.stat().st_mtime)
+            while len(existing) > 20:
+                existing.pop(0).unlink()
+
+            logger.info(f"{self.config.name}: session snapshot saved → {filename}")
+
+        except Exception as e:
+            logger.debug(f"{self.config.name}: session snapshot failed (non-fatal): {e}")
+
     def _flush_anthropic(self, expiring_text: str) -> str:
         """Flush via Anthropic API — minimal call, no tools."""
         try:
@@ -1123,12 +1272,15 @@ class Agent:
                     parts.append(content)
                     parts.append("")
 
-        # Load today's memory file if it exists
+        # Load today's daily log if it exists (episodic memory)
         today = time.strftime("%Y-%m-%d")
         memory_file = self.workspace / "memory" / f"{today}.md"
         if memory_file.exists():
             content = memory_file.read_text().strip()
             if content:
+                # Cap injection to ~4000 chars — keep most recent entries (tail)
+                if len(content) > 4000:
+                    content = "...\n" + content[-4000:]
                 parts.append(f"## Today's Log ({today})")
                 parts.append(content)
                 parts.append("")
@@ -1310,8 +1462,22 @@ class Agent:
             self.history = self._trim_history(self.history)
             self._save_session()
 
-            # Step 6: Record metrics (with token usage)
+            # Step 5.7: Append to daily log (episodic memory — no LLM call)
             elapsed_ms = int((time.monotonic() - start_time) * 1000)
+            if tool_call_count > 0 or len(response) > 100:
+                is_scheduled = bool(context and context.get("structured") or
+                                    context and context.get("scheduled"))
+                self._append_daily_log(
+                    task=message, response=response,
+                    tool_call_count=tool_call_count,
+                    new_messages=new_messages,
+                    elapsed_ms=elapsed_ms,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    is_scheduled=is_scheduled,
+                )
+
+            # Step 6: Record metrics (with token usage)
             metrics.record_message(
                 self.config.name,
                 elapsed_ms=elapsed_ms,
@@ -1982,6 +2148,9 @@ class Agent:
 
     def reset(self):
         """Reset conversation history and clear saved session."""
+        # Snapshot the conversation before it's wiped
+        if self.history:
+            self._save_session_snapshot()
         self.history = []
         self._system_prompt = None
         self._session_meta = {

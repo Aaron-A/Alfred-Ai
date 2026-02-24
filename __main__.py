@@ -1055,8 +1055,12 @@ def cmd_agent_schedule_run(name: str, schedule_id: str):
 
         agent_config = AgentConfig.from_dict(agent_data)
         agent = Agent(agent_config, session_id="schedule")
-        ctx = {"structured": True} if agent_config.schedule_run_mode == "structured" else None
-        return agent.run(task, context=ctx)
+        ctx = {"scheduled": True}
+        if agent_config.schedule_run_mode == "structured":
+            ctx["structured"] = True
+        result = agent.run(task, context=ctx)
+        agent._save_session_snapshot()
+        return result
 
     try:
         result = run_schedule_now(name, schedule_id, agent_runner=_runner)
@@ -2636,8 +2640,13 @@ def cmd_start(foreground: bool = False, _daemon_child: bool = False, port: int =
             # overflow on multi-tool runs.
             agent.history = []
             # Use structured mode (no tool_use, 2 LLM calls) if configured
-            ctx = {"structured": True} if agent_config.schedule_run_mode == "structured" else None
+            ctx = {"scheduled": True}
+            if agent_config.schedule_run_mode == "structured":
+                ctx["structured"] = True
             result = agent.run(task, context=ctx)
+
+            # Snapshot the scheduled run's conversation before it's lost
+            agent._save_session_snapshot()
 
             # Post the agent's response to its mapped Discord channel
             if _discord_bot[0] and result:
