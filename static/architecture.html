@@ -1108,15 +1108,15 @@ const NODE_DATA = {
     categoryColor: '#334155',
     desc: 'FastAPI server on port 7700. Provides endpoints for chat, agent management, metrics with cost tracking, vector query logs, schedules, trading status, and configuration.',
     files: ['core/api.py'],
-    features: ['POST /v1/chat — send messages', 'POST /v1/agents — create/delete agents', 'GET /v1/metrics — query metrics with cost data', 'GET /v1/vector-queries — memory search logs', 'POST /v1/schedules/{id}/run — manual trigger', 'GET /v1/trading/status — Alpaca proxy + round-trip merge', 'POST /v1/admin/reload — daemon hot-reload', 'SSE streaming support', 'Alpaca API caching (10s TTL)']
+    features: ['POST /v1/chat — send messages', 'POST /v1/agents — create/delete agents', 'PATCH /v1/agents/{name}/config — update provider/model/run mode', 'GET /v1/agents/{name}/files — list viewable workspace files', 'GET /v1/agents/{name}/files/{path} — read workspace files (SOUL.md, daily logs, snapshots)', 'GET /v1/metrics — query metrics with cost data', 'GET /v1/vector-queries — memory search logs', 'POST /v1/schedules/{id}/run — manual trigger', 'GET /v1/trading/status — Alpaca proxy + round-trip merge', 'POST /v1/admin/reload — daemon hot-reload', 'SSE streaming support', 'Alpaca API caching (10s TTL)']
   },
   'node-dashboard': {
     title: 'Dashboard',
     category: 'Entry Point',
     categoryColor: '#334155',
-    desc: 'Web-based management UI served by the API. Create and delete agents, view metrics with cost tracking, monitor vector queries, manage schedules, monitor live BTC trading, and browse architecture.',
+    desc: 'Web-based management UI served by the API. Create and delete agents, view metrics with cost tracking, monitor vector queries, manage schedules, monitor live BTC trading, view workspace files, and browse architecture.',
     files: ['static/dashboard.html', 'static/js/dashboard.js', 'static/css/dashboard.css'],
-    features: ['Agent creation with LLM-generated SOUL.md', 'Agent deletion with type-to-confirm safety', 'Per-agent cost tracking and estimation', 'Per-model cost breakdown', 'Vector query log with relevance scores', 'Schedule management with manual run button', 'BTC price chart with candlesticks', 'Real-time position and account info', 'Recent trades table (merged round-trips)', 'Daemon hot-reload from UI']
+    features: ['Agent creation with LLM-generated SOUL.md', 'Agent deletion with type-to-confirm safety', 'Config modal with provider, model, and schedule run mode selector', 'File viewer: daily logs, SOUL.md, and session snapshots per agent', 'Per-agent cost tracking and estimation', 'Per-model cost breakdown', 'Vector query log with relevance scores', 'Schedule management with manual run button', 'BTC price chart with candlesticks', 'Real-time position and account info', 'Recent trades table (merged round-trips)', 'Daemon hot-reload from UI']
   },
   'node-scheduler': {
     title: 'Scheduler',
@@ -1124,7 +1124,7 @@ const NODE_DATA = {
     categoryColor: '#334155',
     desc: 'Built-in cron engine that runs tasks on configurable schedules. Results are automatically posted to the agent\'s Discord channel. Also runs weekly maintenance jobs (memory compaction).',
     files: ['core/scheduler.py'],
-    features: ['Cron expression scheduling', 'Structured run mode dispatch (schedule_run_mode config)', 'Manual trigger via API/dashboard', 'Retry logic (0-3 attempts)', 'Catchup for missed runs', 'Result history tracking', 'Per-schedule enable/disable', 'Weekly memory compaction maintenance', 'Configurable maintenance cron in alfred.json']
+    features: ['Cron expression scheduling', 'Run mode dispatch: tool_use, structured, or batch (per-agent config)', 'Manual trigger via API/dashboard', 'Retry logic (0-3 attempts)', 'Catchup for missed runs', 'Result history tracking', 'Per-schedule enable/disable', 'Weekly memory compaction maintenance', 'Configurable maintenance cron in alfred.json']
   },
   'node-agent-framework': {
     title: 'Agent Framework',
@@ -1132,7 +1132,7 @@ const NODE_DATA = {
     categoryColor: '#3b82f6',
     desc: 'Central orchestration engine. Manages the full agent loop: receives input, recalls memories with smart relevance gating, builds system prompt, calls LLM, dispatches tool calls with auto-retry and result summarization, runs optional reflection, and persists sessions with cost tracking.',
     files: ['core/agent.py'],
-    features: ['Multi-turn tool loop with configurable max rounds', 'Structured execution mode: 2-phase JSON planning (no tool_use, no schemas)', 'Prompt caching: cache_control on system prompt + tool schemas (90% discount on rounds 2+)', 'Smart auto-recall with relevance gating (distance < 0.4)', 'Tool result summarization for outputs > 2K chars', 'Auto-retry on transient errors (timeout, 429, 503) with backoff', 'Post-session reflection loop (opt-in) with confidence scoring', 'System prompt assembly from SOUL + AGENTS + USER + TOOLS + memories', 'Full tool chain persistence (prevents tool-call hallucination)', 'Turn-based session trimming with pre-compaction flush', 'Daily logs: auto-append structured run entries to memory/YYYY-MM-DD.md (zero LLM cost, injected into next system prompt)', 'Session snapshots: save last 15 messages as markdown on reset and after scheduled runs (memory/sessions/)', 'Mid-run memory persist: Context Window Guard summaries stored in vector memory (write-ahead pattern)', 'Per-interaction cost estimation and alerting hooks']
+    features: ['Multi-turn tool loop with configurable max rounds', 'Structured execution mode: 2-phase JSON planning (no tool_use, no schemas)', 'Batch mode: structured + xAI Batch API at 50% cost discount with auto-fallback', 'Prompt caching: cache_control on system prompt + tool schemas (90% discount on rounds 2+)', 'Smart auto-recall with relevance gating (distance < 0.4)', 'Tool result summarization for outputs > 2K chars', 'Auto-retry on transient errors (timeout, 429, 503) with backoff', 'Post-session reflection loop (opt-in) with confidence scoring', 'System prompt assembly from SOUL + AGENTS + USER + TOOLS + today\'s log + yesterday\'s log + memories', 'Full tool chain persistence (prevents tool-call hallucination)', 'Turn-based session trimming with pre-compaction flush to vector memory + daily log', 'Daily logs: auto-append structured run entries to memory/YYYY-MM-DD.md (zero LLM cost, today + yesterday injected into system prompt with 6000 char budget)', 'Session snapshots: save last 15 messages as markdown on reset and after scheduled runs (memory/sessions/)', 'Mid-run memory persist: Context Window Guard summaries stored in vector memory + daily log (write-ahead pattern)', 'Per-interaction cost estimation and alerting hooks']
   },
   'node-config': {
     title: 'Config',
@@ -1146,9 +1146,9 @@ const NODE_DATA = {
     title: 'LLM Client',
     category: 'Core Framework',
     categoryColor: '#3b82f6',
-    desc: 'Multi-provider LLM client supporting Anthropic (native), OpenAI, xAI, and Ollama (OpenAI-compatible). Handles tool formatting, streaming, token counting, and provider fallback.',
+    desc: 'Multi-provider LLM client supporting Anthropic (native), OpenAI, xAI, and Ollama (OpenAI-compatible). Handles tool formatting, streaming, token counting, provider fallback, and xAI Batch API.',
     files: ['core/llm.py'],
-    features: ['Anthropic native API with system prompt caching', 'OpenAI-compatible wrapper for xAI/Ollama', 'Automatic tool schema conversion between formats', 'Primary/secondary provider fallback', 'Token usage tracking per request']
+    features: ['Anthropic native API with system prompt caching', 'OpenAI-compatible wrapper for xAI/Ollama', 'xAI Batch API client (50% cost discount, async with polling)', 'Automatic tool schema conversion between formats', 'Primary/secondary provider fallback', 'Token usage tracking per request']
   },
   'node-memory': {
     title: 'Memory',
@@ -1156,7 +1156,7 @@ const NODE_DATA = {
     categoryColor: '#3b82f6',
     desc: 'LanceDB-backed vector memory with hybrid search, importance scoring, outcome linking, and automatic compaction. Uses cached local embeddings. Every search is logged for observability.',
     files: ['core/memory.py', 'core/embeddings.py'],
-    features: ['Hybrid search: BM25 full-text + vector similarity', 'Importance scoring (0.0-1.0) with search boost', 'Outcome linking between decisions and results', 'Structured metadata filters (symbol, outcome, etc.)', 'Embedding LRU cache (256 entries, SHA-256 keyed)', 'Vector query logging to SQLite for observability', 'Temporal decay weighting (30-day half-life)', '95% similarity dedup within 24h window', 'Auto-compaction: prune old low-importance records', 'Cross-agent memory via shared flag', 'Episodic daily logs (memory/YYYY-MM-DD.md, auto-written, injected into system prompt)', 'Session snapshots (memory/sessions/, last 15 messages, auto-pruned to 20 per agent)', 'Mid-run compaction records persisted as context_flush memories']
+    features: ['Hybrid search: BM25 full-text + vector similarity', 'Importance scoring (0.0-1.0) with search boost', 'Outcome linking between decisions and results', 'Structured metadata filters (symbol, outcome, etc.)', 'Embedding LRU cache (256 entries, SHA-256 keyed)', 'Vector query logging to SQLite for observability', 'Temporal decay weighting (30-day half-life)', '95% similarity dedup within 24h window', 'Auto-compaction: prune old low-importance records', 'Cross-agent memory via shared flag', 'Episodic daily logs (memory/YYYY-MM-DD.md, auto-written, today + yesterday injected into system prompt)', 'Compaction summaries written to both vector memory and daily log markdown', 'Session snapshots (memory/sessions/, last 15 messages, auto-pruned to 20 per agent)', 'Viewable from dashboard via file viewer API']
   },
   'node-alfred': {
     title: 'alfred',
@@ -1316,7 +1316,7 @@ const NODE_DATA = {
     categoryColor: '#f59e0b',
     desc: 'JSON files storing full conversation history including tool_use and tool_result blocks. The LLM sees its own prior tool calls on every turn, preventing tool-call hallucination. Atomic writes prevent corruption. Session snapshots saved as markdown on reset and after scheduled runs.',
     files: ['workspaces/*/session*.json', 'workspaces/*/memory/sessions/*.md'],
-    features: ['Full tool chain persistence (tool_use + tool_result blocks)', 'Turn-based trimming (groups tool messages with their parent turn)', 'JSON format with atomic writes', 'Per-channel/CLI/API sessions', 'Token budget enforcement', 'Pre-compaction flush to vector memory', 'Session snapshots: last 15 messages saved as markdown on reset/schedule completion']
+    features: ['Full tool chain persistence (tool_use + tool_result blocks)', 'Turn-based trimming (groups tool messages with their parent turn)', 'JSON format with atomic writes', 'Per-channel/CLI/API sessions', 'Token budget enforcement', 'Pre-compaction flush to vector memory + daily log markdown', 'Session snapshots: last 15 messages saved as markdown on reset/schedule completion']
   },
   'node-alpaca': {
     title: 'Alpaca API',
@@ -1397,24 +1397,24 @@ const NODE_DATA = {
     categoryColor: '#666',
     desc: 'Central configuration file (gitignored). Defines everything: LLM providers, agent definitions with self-learning config, service credentials, schedules, Discord mappings, alert rules, and maintenance settings.',
     files: ['alfred.json'],
-    features: ['Provider API keys and model defaults', 'Agent definitions with per-agent overrides', 'schedule_run_mode: tool_use or structured (per-agent)', 'Per-agent tool allowlist for schema reduction', 'Self-learning config: reflection_enabled, summarize_tool_results, auto_recall_threshold', 'Alert rules: error rate, daily cost, bot crash thresholds', 'Service credentials with domain mapping', 'Cron schedule definitions', 'Maintenance settings (weekly memory compaction)', 'Discord channel-to-agent routing', 'Hot-reload via daemon SIGHUP']
+    features: ['Provider API keys and model defaults', 'Agent definitions with per-agent overrides', 'schedule_run_mode: tool_use, structured, or batch (per-agent)', 'Per-agent tool allowlist for schema reduction', 'Self-learning config: reflection_enabled, summarize_tool_results, auto_recall_threshold', 'Alert rules: error rate, daily cost, bot crash thresholds', 'Service credentials with domain mapping', 'Cron schedule definitions', 'Maintenance settings (weekly memory compaction)', 'Discord channel-to-agent routing', 'Hot-reload via daemon SIGHUP']
   },
   // ── Structured Execution Flow Participants ──
   'node-seq2-scheduler': {
     title: 'Scheduler',
     category: 'Structured Execution',
     categoryColor: '#a855f7',
-    desc: 'Detects schedule_run_mode: "structured" on the agent config and injects {"structured": true, "scheduled": true} into the run context. Skips the tool-round cap that normally limits scheduled runs. After the structured run completes, triggers session snapshot and daily log append.',
+    desc: 'Detects schedule_run_mode ("structured" or "batch") on the agent config and injects the appropriate context flags. Batch mode adds {"batch": true} to enable xAI Batch API at 50% cost. Skips the tool-round cap that normally limits scheduled runs. After the run completes, triggers session snapshot and daily log append.',
     files: ['__main__.py', 'core/scheduler.py'],
-    features: ['Cron trigger with structured context injection', 'Tool-round cap bypass for structured mode', 'Session snapshot saved after each scheduled run', 'Daily log auto-appended after run completion']
+    features: ['Cron trigger with structured/batch context injection', 'Batch mode: structured + xAI Batch API (50% cost discount)', 'Tool-round cap bypass for structured/batch modes', 'Session snapshot saved after each scheduled run', 'Daily log auto-appended after run completion']
   },
   'node-seq2-agent': {
     title: 'Agent',
     category: 'Structured Execution',
     categoryColor: '#a855f7',
-    desc: 'Runs _run_structured() which makes exactly 2 LLM calls: one gather phase (data collection) and one action phase (decisions). Both return JSON plans that Python executes directly. No tool_use protocol, no tool schemas sent. Reduces a typical scheduled run from ~150K tokens to ~15K tokens.',
+    desc: 'Runs _run_structured() which makes exactly 2 LLM calls: one gather phase (data collection) and one action phase (decisions). Both return JSON plans that Python executes directly. No tool_use protocol, no tool schemas sent. Reduces a typical scheduled run from ~150K tokens to ~15K tokens. In batch mode, LLM calls use xAI Batch API with automatic fallback to real-time on timeout.',
     files: ['core/agent.py'],
-    features: ['2-phase JSON planning: gather then act', 'No tool_use protocol overhead', 'Python-direct tool execution from JSON plans', 'Result cap via tool_result_max_chars * 2', 'Reflection disabled for structured runs']
+    features: ['2-phase JSON planning: gather then act', 'No tool_use protocol overhead', 'Python-direct tool execution from JSON plans', 'Batch mode: xAI Batch API with auto-fallback to real-time', 'Result cap via tool_result_max_chars * 2', 'Reflection disabled for structured runs']
   },
   'node-seq2-llm': {
     title: 'LLM',
