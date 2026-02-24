@@ -332,8 +332,14 @@ function renderAgentsTable() {
       : '';
 
     const cost = m.estimated_cost || 0;
+    const eName = escHtml(agent.name);
+    const fileViewBtns = `<span class="file-view-btns">`
+      + `<button class="file-btn" onclick="openFileViewer('${eName}','today')" title="Today's daily log">📋</button>`
+      + `<button class="file-btn" onclick="openFileViewer('${eName}','SOUL.md')" title="SOUL.md">🧠</button>`
+      + `<button class="file-btn" onclick="openFileViewer('${eName}','snapshot')" title="Latest snapshot">📸</button>`
+      + `</span>`;
     html += `<tr>
-      <td class="fw-600" style="color:var(--text);">${escHtml(agent.name)}</td>
+      <td class="fw-600" style="color:var(--text);">${eName} ${fileViewBtns}</td>
       <td>${statusBadge(agent.status || 'active')}</td>
       <td><span class="text-dim">${escHtml(provider)}/${escHtml(modelShort)}</span> ${editBtn}${deleteBtn}</td>
       <td>${sessions.length || 0}</td>
@@ -392,25 +398,10 @@ function openConfigModal(agentName) {
   document.getElementById('modalDailyCost').value = agent.max_daily_cost ?? 0;
   document.getElementById('modalContextBudget').value = Math.round((agent.context_budget_pct ?? 0.60) * 100);
 
-  // Hide irrelevant fields for structured/batch mode agents
+  // Set run mode dropdown
   const runMode = agent.schedule_run_mode || 'tool_use';
-  const isAutoManaged = runMode === 'structured' || runMode === 'batch';
-  document.getElementById('modalRowRounds').style.display = isAutoManaged ? 'none' : '';
-  document.getElementById('modalRowContextBudget').style.display = isAutoManaged ? 'none' : '';
-  document.getElementById('modalStructuredBadge').style.display = isAutoManaged ? '' : 'none';
-  if (isAutoManaged) {
-    const badgeText = document.getElementById('modalModeBadgeText');
-    const noteText = document.getElementById('modalModeNote');
-    if (runMode === 'batch') {
-      badgeText.textContent = 'BATCH MODE';
-      badgeText.className = 'batch-tag';
-      noteText.textContent = 'Uses xAI Batch API at 50% cost discount';
-    } else {
-      badgeText.textContent = 'STRUCTURED MODE';
-      badgeText.className = 'structured-tag';
-      noteText.textContent = 'Tool rounds and context budget are managed automatically';
-    }
-  }
+  document.getElementById('modalRunMode').value = runMode;
+  updateRunModeUI(runMode);
 
   // SAVE always enabled — let user save whenever they want
   const saveBtn = document.getElementById('modalSaveBtn');
@@ -475,6 +466,31 @@ function onModalProviderChange() {
 function onModalModelChange() {
 }
 
+function onModalRunModeChange() {
+  const mode = document.getElementById('modalRunMode').value;
+  updateRunModeUI(mode);
+}
+
+function updateRunModeUI(mode) {
+  const isAutoManaged = mode === 'structured' || mode === 'batch';
+  document.getElementById('modalRowRounds').style.display = isAutoManaged ? 'none' : '';
+  document.getElementById('modalRowContextBudget').style.display = isAutoManaged ? 'none' : '';
+  document.getElementById('modalStructuredBadge').style.display = isAutoManaged ? '' : 'none';
+  if (isAutoManaged) {
+    const badgeText = document.getElementById('modalModeBadgeText');
+    const noteText = document.getElementById('modalModeNote');
+    if (mode === 'batch') {
+      badgeText.textContent = 'BATCH MODE';
+      badgeText.className = 'batch-tag';
+      noteText.textContent = 'Uses xAI Batch API at 50% cost discount';
+    } else {
+      badgeText.textContent = 'STRUCTURED MODE';
+      badgeText.className = 'structured-tag';
+      noteText.textContent = 'Tool rounds and context budget are managed automatically';
+    }
+  }
+}
+
 function checkModalDirty() {
   const modal = document.getElementById('configModal');
   const agentName = modal.dataset.agent;
@@ -489,6 +505,7 @@ function checkModalDirty() {
   const isDirty = (
     newProvider !== origProvider ||
     newModel !== origModel ||
+    document.getElementById('modalRunMode').value !== (agent.schedule_run_mode || 'tool_use') ||
     parseInt(document.getElementById('modalMaxRounds').value) !== (agent.max_tool_rounds ?? 10) ||
     parseInt(document.getElementById('modalScheduleRounds').value) !== (agent.schedule_max_tool_rounds ?? 15) ||
     parseFloat(document.getElementById('modalDailyCost').value) !== (agent.max_daily_cost ?? 0) ||
@@ -504,6 +521,7 @@ async function saveModalConfig() {
   const agentName = modal.dataset.agent;
   const provider = document.getElementById('modalProvider').value;
   const model = document.getElementById('modalModel').value;
+  const schedule_run_mode = document.getElementById('modalRunMode').value;
   const max_tool_rounds = parseInt(document.getElementById('modalMaxRounds').value);
   const schedule_max_tool_rounds = parseInt(document.getElementById('modalScheduleRounds').value);
   const max_daily_cost = parseFloat(document.getElementById('modalDailyCost').value);
@@ -514,7 +532,7 @@ async function saveModalConfig() {
   saveBtn.textContent = 'SAVING...';
 
   const result = await patchJSON(`/v1/agents/${agentName}/config`, {
-    provider, model, max_tool_rounds, schedule_max_tool_rounds,
+    provider, model, schedule_run_mode, max_tool_rounds, schedule_max_tool_rounds,
     max_daily_cost, context_budget_pct,
   });
 
@@ -524,6 +542,7 @@ async function saveModalConfig() {
     if (agent) {
       agent.provider = provider;
       agent.model = model;
+      agent.schedule_run_mode = schedule_run_mode;
       agent.max_tool_rounds = max_tool_rounds;
       agent.schedule_max_tool_rounds = schedule_max_tool_rounds;
       agent.max_daily_cost = max_daily_cost;
@@ -1705,6 +1724,47 @@ function updateRefreshInfo() {
   el.textContent = 'updated ' + now.toLocaleTimeString();
 }
 
+// ─── File Viewer Modal ────────────────────────────
+
+async function openFileViewer(agentName, fileKey) {
+  const modal = document.getElementById('fileViewerModal');
+  const titleEl = document.getElementById('fileViewerTitle');
+  const contentEl = document.getElementById('fileViewerContent');
+
+  contentEl.textContent = 'Loading...';
+  modal.classList.add('active');
+
+  let filepath;
+  if (fileKey === 'today') {
+    const today = new Date().toISOString().split('T')[0];
+    filepath = `memory/${today}.md`;
+    titleEl.textContent = `${agentName} — Daily Log (${today})`;
+  } else if (fileKey === 'snapshot') {
+    // Fetch file list to find latest snapshot
+    titleEl.textContent = `${agentName} — Latest Snapshot`;
+    const listing = await fetchJSON(`/v1/agents/${agentName}/files`);
+    if (!listing?.files) { contentEl.textContent = 'Failed to load file list.'; return; }
+    const snapshots = listing.files.filter(f => f.startsWith('memory/sessions/'));
+    if (!snapshots.length) { contentEl.textContent = 'No session snapshots yet.'; return; }
+    filepath = snapshots[0]; // Already sorted by newest first from API
+    titleEl.textContent = `${agentName} — ${filepath.split('/').pop()}`;
+  } else {
+    filepath = fileKey;
+    titleEl.textContent = `${agentName} — ${fileKey}`;
+  }
+
+  const data = await fetchJSON(`/v1/agents/${agentName}/files/${filepath}`);
+  if (data?.content != null) {
+    contentEl.textContent = data.content || '(empty file)';
+  } else {
+    contentEl.textContent = 'File not found or empty.';
+  }
+}
+
+function closeFileViewer() {
+  document.getElementById('fileViewerModal').classList.remove('active');
+}
+
 // ─── Init ─────────────────────────────────────────
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -1747,6 +1807,13 @@ document.addEventListener('DOMContentLoaded', () => {
   if (deleteSchedModal) {
     deleteSchedModal.addEventListener('click', (e) => {
       if (e.target === deleteSchedModal) closeDeleteScheduleModal();
+    });
+  }
+
+  const fileViewerModal = document.getElementById('fileViewerModal');
+  if (fileViewerModal) {
+    fileViewerModal.addEventListener('click', (e) => {
+      if (e.target === fileViewerModal) closeFileViewer();
     });
   }
 

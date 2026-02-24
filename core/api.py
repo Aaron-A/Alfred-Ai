@@ -1182,6 +1182,85 @@ def create_app() -> FastAPI:
             "restart_required": True,
         }
 
+    # ─── Workspace File Viewer ──────────────────────────
+
+    _FILE_WHITELIST = {"SOUL.md", "USER.md", "AGENTS.md", "TOOLS.md"}
+
+    @app.get("/v1/agents/{name}/files/{filepath:path}")
+    async def get_agent_file(name: str, filepath: str):
+        """Read a workspace file for the given agent.
+
+        Allowed paths: SOUL.md, USER.md, AGENTS.md, TOOLS.md,
+        memory/<date>.md, memory/sessions/<snapshot>.md
+        """
+        cfg = _load_config()
+        agents_cfg = cfg.get("agents", {})
+        if name not in agents_cfg:
+            raise HTTPException(status_code=404, detail=f"Agent '{name}' not found")
+
+        workspace = Path(agents_cfg[name].get("workspace", f"workspaces/{name}"))
+        if not workspace.is_absolute():
+            workspace = config.PROJECT_ROOT / workspace
+
+        # Sanitise: resolve and ensure it stays inside workspace
+        target = (workspace / filepath).resolve()
+        ws_resolved = str(workspace.resolve()) + "/"
+        if not str(target).startswith(ws_resolved):
+            raise HTTPException(status_code=403, detail="Path traversal blocked")
+
+        # Whitelist check
+        try:
+            rel = target.relative_to(workspace.resolve())
+        except ValueError:
+            raise HTTPException(status_code=403, detail="Path traversal blocked")
+        parts = rel.parts
+        allowed = False
+        if len(parts) == 1 and parts[0] in _FILE_WHITELIST:
+            allowed = True
+        elif len(parts) == 2 and parts[0] == "memory" and parts[1].endswith(".md"):
+            allowed = True
+        elif len(parts) == 3 and parts[0] == "memory" and parts[1] == "sessions" and parts[2].endswith(".md"):
+            allowed = True
+
+        if not allowed:
+            raise HTTPException(status_code=403, detail="File not in whitelist")
+
+        if not target.exists():
+            raise HTTPException(status_code=404, detail="File not found")
+
+        content = target.read_text(encoding="utf-8", errors="replace")
+        return {"filename": str(rel), "content": content}
+
+    @app.get("/v1/agents/{name}/files")
+    async def list_agent_files(name: str):
+        """List available workspace files for viewing."""
+        cfg = _load_config()
+        agents_cfg = cfg.get("agents", {})
+        if name not in agents_cfg:
+            raise HTTPException(status_code=404, detail=f"Agent '{name}' not found")
+
+        workspace = Path(agents_cfg[name].get("workspace", f"workspaces/{name}"))
+        if not workspace.is_absolute():
+            workspace = config.PROJECT_ROOT / workspace
+
+        files = []
+        # Workspace root files
+        for f in _FILE_WHITELIST:
+            if (workspace / f).exists():
+                files.append(f)
+        # Daily logs
+        memory_dir = workspace / "memory"
+        if memory_dir.exists():
+            for f in sorted(memory_dir.glob("*.md"), reverse=True)[:7]:
+                files.append(f"memory/{f.name}")
+        # Session snapshots
+        sessions_dir = memory_dir / "sessions"
+        if sessions_dir.exists():
+            for f in sorted(sessions_dir.glob("*.md"), reverse=True)[:5]:
+                files.append(f"memory/sessions/{f.name}")
+
+        return {"agent": name, "files": files}
+
     # ─── Trading Status ────────────────────────────────
 
     def _merge_round_trips(all_trades: list[dict], asset_type: str = "crypto", comm_cfg: dict = None) -> list[dict]:

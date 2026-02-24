@@ -272,6 +272,14 @@
       <select id="modalModel" class="modal-select" onchange="onModalModelChange()"></select>
     </div>
     <div class="modal-divider"></div>
+    <div class="modal-field">
+      <label class="modal-label" for="modalRunMode">SCHEDULE RUN MODE <span class="modal-help" onclick="showTooltip(this, 'How the agent executes scheduled runs. Tool Use: standard agentic loop with tool calls. Structured: 2-phase JSON execution without tool schemas (cheaper, faster). Batch: structured mode using xAI Batch API at 50% cost discount (xAI provider only).', event)">?</span></label>
+      <select id="modalRunMode" class="modal-select" onchange="onModalRunModeChange()">
+        <option value="tool_use">Tool Use</option>
+        <option value="structured">Structured</option>
+        <option value="batch">Batch (xAI only)</option>
+      </select>
+    </div>
     <div class="modal-structured-badge" id="modalStructuredBadge" style="display:none">
       <span class="structured-tag" id="modalModeBadgeText">STRUCTURED MODE</span>
       <span class="structured-note" id="modalModeNote">Tool rounds and context budget are managed automatically</span>
@@ -402,6 +410,17 @@
       <button class="modal-btn modal-btn--dismiss" onclick="closeDeleteAgentModal()">CANCEL</button>
       <button class="modal-btn modal-btn--danger" id="deleteAgentBtn" disabled onclick="deleteAgent()">DELETE</button>
     </div>
+  </div>
+</div>
+
+<!-- ═════════ FILE VIEWER MODAL ═════════ -->
+<div class="modal-overlay" id="fileViewerModal">
+  <div class="modal-box modal-box--wide">
+    <div class="modal-header">
+      <span class="modal-title" id="fileViewerTitle">File</span>
+      <button class="modal-close" onclick="closeFileViewer()">&times;</button>
+    </div>
+    <pre class="file-viewer-content" id="fileViewerContent">Loading...</pre>
   </div>
 </div>
 

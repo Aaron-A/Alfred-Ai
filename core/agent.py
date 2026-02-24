@@ -23,7 +23,7 @@ import json
 import time
 from pathlib import Path
 from typing import Optional
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from dataclasses import dataclass, field
 
 from .config import config, _load_config, _save_config
@@ -742,6 +742,8 @@ class Agent:
                 )
                 self.memory.store(record, dedup=False)
                 logger.debug(f"{self.config.name}: mid-run compaction saved to vector memory")
+                # Also write to daily log for human readability
+                self._append_compaction_to_daily_log(condensed[:400], "mid-run compaction", len(old_rounds))
             except Exception as e:
                 logger.debug(f"{self.config.name}: mid-run compaction memory store failed (non-fatal): {e}")
 
@@ -1034,6 +1036,9 @@ class Agent:
             )
             self.memory.store(record, dedup=False)  # Never dedup flushes — each is unique
 
+            # Also write to daily log for human readability
+            self._append_compaction_to_daily_log(summary, "pre-compaction flush")
+
             msg_count = len(expiring_messages)
             logger.info(f"{self.config.name}: flushed {msg_count} expiring messages to memory")
 
@@ -1042,6 +1047,35 @@ class Agent:
             logger.warning(f"{self.config.name}: pre-compaction flush failed (non-fatal): {e}")
 
     # ─── Daily Log & Session Snapshots ────────────────────────
+
+    def _append_compaction_to_daily_log(self, summary: str, source: str, round_count: int = 0):
+        """Append a compaction summary entry to today's daily log (best-effort)."""
+        try:
+            from .config import config as _config
+            now = datetime.now(_config.tz)
+            today = now.strftime("%Y-%m-%d")
+            memory_dir = self.workspace / "memory"
+            memory_dir.mkdir(exist_ok=True)
+            log_file = memory_dir / f"{today}.md"
+
+            if log_file.exists() and log_file.stat().st_size > 50_000:
+                return
+
+            time_str = now.strftime("%H:%M")
+            lines = [f"### {time_str} — {source}"]
+            lines.append(f"**Summary:** {summary[:400]}")
+            if round_count:
+                lines.append(f"*{round_count} rounds compacted*")
+            lines.append("")
+
+            entry = "\n".join(lines) + "\n"
+            is_new = not log_file.exists() or log_file.stat().st_size == 0
+            with open(log_file, "a") as f:
+                if is_new:
+                    f.write(f"# {self.config.name} — {today}\n\n")
+                f.write(entry)
+        except Exception:
+            pass  # Best-effort, never crash
 
     def _append_daily_log(self, task: str, response: str, tool_call_count: int,
                           new_messages: list[dict], elapsed_ms: int,
@@ -1275,6 +1309,7 @@ class Agent:
         # Load today's daily log if it exists (episodic memory)
         today = time.strftime("%Y-%m-%d")
         memory_file = self.workspace / "memory" / f"{today}.md"
+        today_chars = 0
         if memory_file.exists():
             content = memory_file.read_text().strip()
             if content:
@@ -1283,6 +1318,25 @@ class Agent:
                     content = "...\n" + content[-4000:]
                 parts.append(f"## Today's Log ({today})")
                 parts.append(content)
+                parts.append("")
+                today_chars = len(content)
+
+        # Yesterday's log — gives continuity across midnight boundaries
+        # Only inject if combined budget stays under 6000 chars
+        try:
+            from .config import config as _config
+            yesterday = (datetime.now(_config.tz) - timedelta(days=1)).strftime("%Y-%m-%d")
+        except Exception:
+            yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
+        yesterday_file = self.workspace / "memory" / f"{yesterday}.md"
+        remaining = 6000 - today_chars
+        if yesterday_file.exists() and remaining > 500:
+            yday_content = yesterday_file.read_text().strip()
+            if yday_content:
+                if len(yday_content) > remaining:
+                    yday_content = "...\n" + yday_content[-remaining:]
+                parts.append(f"## Yesterday's Log ({yesterday})")
+                parts.append(yday_content)
                 parts.append("")
 
         # Check inbox for unread messages

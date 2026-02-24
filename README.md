@@ -153,7 +153,7 @@ alfred api start       # API only, no scheduler/Discord
 
 The dashboard shows:
 - **Stats grid** — agent count, total messages, token usage, estimated cost, avg response time, Discord health
-- **Agents tab** — all agents with status, provider/model (editable via modal), sessions, messages, tokens, cost, errors
+- **Agents tab** — all agents with status, provider/model (editable via modal with schedule run mode selector), sessions, messages, tokens, cost, errors. File viewer buttons on each agent to view daily logs, SOUL.md, and session snapshots.
 - **+ New Agent** — create agents directly from the dashboard with optional LLM-generated SOUL.md
 - **Schedules tab** — all scheduled tasks with run stats, success rates, next fire time, manual trigger
 - **Metrics tab** — per-model cost breakdown, per-agent detail cards, and vector query logs with relevance scores
@@ -240,9 +240,9 @@ alfred-ai/
 - **Smart auto-recall** — relevance gating filters out low-quality matches (distance > 0.4) and skips recall for very short messages. Prevents noise injection into the system prompt.
 - **Temporal decay** — recent memories get a recency bonus during search. A 30-day exponential half-life blends 80% semantic similarity with 20% recency.
 - **Deduplication** — before storing a new memory, a similarity check runs against existing records. Near-identical memories (≥ 95% similar) within 24 hours update the existing record instead.
-- **Pre-compaction flush** — when the session window fills up and old messages are trimmed, the agent summarizes the expiring context and stores it in vector memory.
-- **Mid-run memory persist** — when the Context Window Guard compacts tool rounds mid-run, the summary is also stored in vector memory so it survives later session trimming.
-- **Daily logs** — after each run, a structured entry (task, tools used, result excerpt, token count) is appended to `memory/YYYY-MM-DD.md`. No LLM call. Today's log is auto-injected into the system prompt (capped at 4000 chars).
+- **Pre-compaction flush** — when the session window fills up and old messages are trimmed, the agent summarizes the expiring context and stores it in both vector memory and the daily log markdown.
+- **Mid-run memory persist** — when the Context Window Guard compacts tool rounds mid-run, the summary is stored in vector memory and appended to the daily log so it survives later session trimming.
+- **Daily logs** — after each run, a structured entry (task, tools used, result excerpt, token count) is appended to `memory/YYYY-MM-DD.md`. No LLM call. Today's log and yesterday's log are auto-injected into the system prompt (combined 6000 char budget) for cross-midnight continuity.
 - **Session snapshots** — on session reset or after scheduled runs, the last 15 meaningful messages (user + assistant only) are saved as a markdown file in `memory/sessions/`. Auto-prunes to 20 snapshots per agent.
 - **Weekly compaction** — a maintenance job prunes old low-importance records to keep the vector store lean.
 - **Memory quotas** — auto-compaction triggers when an agent exceeds 10K memories, keeping the vector store performant.
@@ -270,7 +270,7 @@ Tool execution includes **auto-retry** on transient errors (timeout, 429, 503) w
 
 **Session persistence** saves conversation history to disk after every interaction, including full tool_use and tool_result blocks (preventing tool-call hallucination). On restart, agents resume where they left off. A sliding window keeps the last 50 turns (configurable), trimming oldest messages first — with pre-compaction flush preserving important context before anything is dropped. A **Context Window Guard** monitors total context size before each API call during tool loops — if context exceeds a configurable budget (default 60% of the model's context window), older tool rounds are automatically compacted into a summary while keeping recent rounds intact. This prevents quadratic token growth on long multi-tool runs. **Secret sanitization** automatically redacts API keys and tokens (sk-, xai-, ghp_, AKIA, etc.) from agent responses before they're returned or stored.
 
-**Structured execution** (`schedule_run_mode: "structured"`) bypasses Anthropic's tool_use protocol entirely for scheduled runs. The agent makes exactly 2 LLM calls — one to plan data gathering, one to plan actions — both outputting JSON that Python executes directly. This eliminates tool schema overhead (~16K tokens per round) and reduces a typical scheduled run from ~150K tokens to ~15K tokens. Interactive chat still uses the standard tool_use loop.
+**Structured execution** (`schedule_run_mode: "structured"`) bypasses Anthropic's tool_use protocol entirely for scheduled runs. The agent makes exactly 2 LLM calls — one to plan data gathering, one to plan actions — both outputting JSON that Python executes directly. This eliminates tool schema overhead (~16K tokens per round) and reduces a typical scheduled run from ~150K tokens to ~15K tokens. Interactive chat still uses the standard tool_use loop. **Batch mode** (`"batch"`) wraps structured execution in the xAI Batch API for an additional 50% cost discount, with automatic fallback to real-time on timeout.
 
 **Prompt caching** marks the system prompt and tool schemas with Anthropic's `cache_control: {"type": "ephemeral"}` for interactive sessions. The first round pays a 1.25× write premium; subsequent rounds read from cache at 0.1× (90% discount). With a 5-minute TTL, multi-turn conversations see significant savings on the static portions of each API call.
 
@@ -352,7 +352,7 @@ All configuration lives in `alfred.json` (auto-generated by `alfred setup`):
 | `context_window_tokens` | 200000 | Model's context window size (tokens) |
 | `context_budget_pct` | 0.60 | Compact when context exceeds this % of window |
 | `schedule_max_tool_rounds` | 15 | Separate (lower) tool round cap for scheduled runs |
-| `schedule_run_mode` | `"tool_use"` | `"tool_use"` (standard loop) or `"structured"` (2-phase JSON, no tool schemas) |
+| `schedule_run_mode` | `"tool_use"` | `"tool_use"` (standard loop), `"structured"` (2-phase JSON, no tool schemas), or `"batch"` (structured + xAI Batch API at 50% cost) |
 | `temperature` | 0.7 | LLM sampling temperature |
 
 ## Discord Setup
@@ -387,7 +387,9 @@ GET  /v1/agents            List all agents
 POST /v1/agents            Create a new agent (with optional SOUL.md generation)
 DELETE /v1/agents/{name}   Delete an agent and its workspace
 GET  /v1/agents/{name}     Agent details + session info
-PATCH /v1/agents/{name}/config  Update agent provider/model
+PATCH /v1/agents/{name}/config  Update agent provider/model/run mode
+GET  /v1/agents/{name}/files    List viewable workspace files
+GET  /v1/agents/{name}/files/{path}  Read a workspace file (SOUL.md, daily logs, snapshots)
 GET  /v1/sessions/{agent}  List saved sessions for an agent
 GET  /v1/sessions/{agent}/{id}  Get session messages (?last=N for recent)
 DELETE /v1/sessions/{agent}/{id}  Delete a session

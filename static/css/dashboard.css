@@ -1426,3 +1426,51 @@ body.light-theme .batch-tag {
   color: var(--cyan);
   border-color: var(--cyan);
 }
+
+/* ─── File View Buttons (agent name cell) ────── */
+
+.file-view-btns {
+  display: inline-flex;
+  gap: 2px;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+
+.file-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 11px;
+  padding: 1px 3px;
+  border-radius: 3px;
+  opacity: 0.45;
+  transition: opacity 0.15s, background 0.15s;
+  line-height: 1;
+}
+
+.file-btn:hover {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+body.light-theme .file-btn:hover {
+  background: rgba(0, 0, 0, 0.06);
+}
+
+/* ─── File Viewer Modal ───────────────────────── */
+
+.file-viewer-content {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-muted);
+  background: var(--surface);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius);
+  padding: 16px;
+  max-height: 60vh;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+}
