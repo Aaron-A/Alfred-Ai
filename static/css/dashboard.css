@@ -806,6 +806,20 @@ body.light-theme .structured-tag {
   color: #007a3d;
   background: rgba(0, 128, 64, 0.12);
 }
+.batch-tag {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: #f97316;
+  background: rgba(249, 115, 22, 0.15);
+  padding: 2px 8px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+body.light-theme .batch-tag {
+  color: #c2410c;
+  background: rgba(249, 115, 22, 0.12);
+}
 
 .modal-field-row {
   display: flex;

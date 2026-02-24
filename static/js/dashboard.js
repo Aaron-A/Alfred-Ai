@@ -392,11 +392,25 @@ function openConfigModal(agentName) {
   document.getElementById('modalDailyCost').value = agent.max_daily_cost ?? 0;
   document.getElementById('modalContextBudget').value = Math.round((agent.context_budget_pct ?? 0.60) * 100);
 
-  // Hide irrelevant fields for structured-mode agents
-  const isStructured = agent.schedule_run_mode === 'structured';
-  document.getElementById('modalRowRounds').style.display = isStructured ? 'none' : '';
-  document.getElementById('modalRowContextBudget').style.display = isStructured ? 'none' : '';
-  document.getElementById('modalStructuredBadge').style.display = isStructured ? '' : 'none';
+  // Hide irrelevant fields for structured/batch mode agents
+  const runMode = agent.schedule_run_mode || 'tool_use';
+  const isAutoManaged = runMode === 'structured' || runMode === 'batch';
+  document.getElementById('modalRowRounds').style.display = isAutoManaged ? 'none' : '';
+  document.getElementById('modalRowContextBudget').style.display = isAutoManaged ? 'none' : '';
+  document.getElementById('modalStructuredBadge').style.display = isAutoManaged ? '' : 'none';
+  if (isAutoManaged) {
+    const badgeText = document.getElementById('modalModeBadgeText');
+    const noteText = document.getElementById('modalModeNote');
+    if (runMode === 'batch') {
+      badgeText.textContent = 'BATCH MODE';
+      badgeText.className = 'batch-tag';
+      noteText.textContent = 'Uses xAI Batch API at 50% cost discount';
+    } else {
+      badgeText.textContent = 'STRUCTURED MODE';
+      badgeText.className = 'structured-tag';
+      noteText.textContent = 'Tool rounds and context budget are managed automatically';
+    }
+  }
 
   // SAVE always enabled — let user save whenever they want
   const saveBtn = document.getElementById('modalSaveBtn');

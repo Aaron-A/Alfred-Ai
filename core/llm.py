@@ -5,6 +5,7 @@ Unified interface — swap providers without changing agent code.
 """
 
 import json
+import time
 import urllib.request
 import urllib.error
 from typing import Optional
@@ -65,6 +66,7 @@ class LLMClient:
         self.model = model or config.get_default_model(self.provider)
         self.base_url = base_url or self.PROVIDER_URLS.get(self.provider, "")
         self._anthropic_client = None
+        self._batch_client = None
 
         # Secondary (fallback) provider — loaded from config
         self._secondary_provider = config.LLM_SECONDARY_PROVIDER
@@ -78,6 +80,13 @@ class LLMClient:
             import anthropic
             self._anthropic_client = anthropic.Anthropic(api_key=self.api_key)
         return self._anthropic_client
+
+    @property
+    def batch_client(self) -> Optional['XAIBatchClient']:
+        """Lazy-load xAI batch client (only available for xAI provider)."""
+        if self._batch_client is None and self.provider == "xai":
+            self._batch_client = XAIBatchClient(self.api_key)
+        return self._batch_client
 
     def ask(
         self,
@@ -476,6 +485,152 @@ def detect_ollama() -> tuple[bool, list[str]]:
             return True, models
     except Exception:
         return False, []
+
+
+# ─── xAI Batch API Client ────────────────────────────────────────
+
+
+class XAIBatchClient:
+    """
+    xAI Batch API client — submit LLM requests at 50% cost.
+
+    Workflow: create batch → add request → poll until complete → get result.
+    Falls back gracefully on timeout so the caller can retry via real-time API.
+    """
+
+    BASE_URL = "https://api.x.ai/v1"
+
+    def __init__(self, api_key: str):
+        self.api_key = api_key
+
+    def _request(self, method: str, path: str, body: dict = None) -> dict:
+        """Make an authenticated request to the xAI batch API."""
+        url = f"{self.BASE_URL}{path}"
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+            "User-Agent": "Alfred-AI/1.0",
+        }
+        data = json.dumps(body).encode("utf-8") if body else None
+        req = urllib.request.Request(url, data=data, headers=headers, method=method)
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
+    def submit_and_wait(
+        self,
+        model: str,
+        system: str,
+        user_msg: str,
+        max_tokens: int = 4096,
+        temperature: float = 0.7,
+        poll_interval: int = 5,
+        timeout: int = 600,
+    ) -> LLMResponse:
+        """
+        Submit a single chat completion to the batch API and poll until done.
+
+        Args:
+            model: xAI model name (e.g. grok-4-1-fast-reasoning)
+            system: System prompt text
+            user_msg: User message text
+            max_tokens: Max output tokens
+            temperature: Sampling temperature
+            poll_interval: Seconds between status polls
+            timeout: Max seconds to wait before raising TimeoutError
+
+        Returns:
+            LLMResponse with text and token counts
+
+        Raises:
+            TimeoutError: if batch doesn't complete within timeout
+            RuntimeError: if batch request fails
+        """
+        # 1. Create batch
+        batch = self._request("POST", "/batches", {"name": f"alfred-{int(time.time())}"})
+        batch_id = batch["id"]
+        logger.debug(f"xai-batch: created batch {batch_id}")
+
+        # 2. Add request
+        request_id = f"req-{int(time.time())}"
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user_msg},
+        ]
+        self._request("POST", f"/batches/{batch_id}/requests", {
+            "batch_request_id": request_id,
+            "batch_request": {
+                "chat_get_completion": {
+                    "model": model,
+                    "messages": messages,
+                    "max_tokens": max_tokens,
+                    "temperature": temperature,
+                }
+            },
+        })
+        logger.debug(f"xai-batch: added request {request_id} to batch {batch_id}")
+
+        # 3. Poll until complete or timeout
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            status = self._request("GET", f"/batches/{batch_id}")
+            num_success = status.get("num_success", 0)
+            num_error = status.get("num_error", 0)
+
+            if num_success > 0:
+                logger.debug(f"xai-batch: batch {batch_id} completed")
+                break
+            if num_error > 0:
+                raise RuntimeError(f"xAI batch request failed (batch {batch_id})")
+
+            time.sleep(poll_interval)
+        else:
+            # Timed out — cancel batch and raise so caller can fallback
+            try:
+                self._request("POST", f"/batches/{batch_id}:cancel")
+            except Exception:
+                pass
+            raise TimeoutError(f"xAI batch {batch_id} did not complete within {timeout}s")
+
+        # 4. Get results
+        results = self._request("GET", f"/batches/{batch_id}/results")
+        items = results.get("items", results.get("results", []))
+        if not items:
+            raise RuntimeError(f"xAI batch {batch_id} returned no results")
+
+        item = items[0]
+        # Navigate the response structure
+        response_data = item.get("response", item)
+        choices = response_data.get("choices", [])
+        if not choices:
+            # Try nested structure
+            chat_result = response_data.get("chat_get_completion", response_data)
+            choices = chat_result.get("choices", [])
+
+        text = ""
+        if choices:
+            text = choices[0].get("message", {}).get("content", "")
+
+        usage = response_data.get("usage", {})
+        if not usage:
+            chat_result = response_data.get("chat_get_completion", {})
+            usage = chat_result.get("usage", {})
+
+        input_tokens = usage.get("prompt_tokens", 0)
+        output_tokens = usage.get("completion_tokens", 0)
+
+        # Track cost info
+        cost_data = item.get("cost_breakdown", {})
+        if cost_data:
+            cost_usd = cost_data.get("total_cost_usd_ticks", 0) / 1e10
+            logger.info(f"xai-batch: cost ${cost_usd:.6f}")
+
+        return LLMResponse(
+            text=text,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            model=model,
+            provider="xai-batch",
+        )
 
 
 # ─── Singleton ───────────────────────────────────────────────────

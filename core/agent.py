@@ -1437,7 +1437,7 @@ class Agent:
             if context and context.get("structured"):
                 # Structured mode: 2 LLM calls, no tool_use, no tool schemas
                 response, tool_call_count, input_tokens, output_tokens, new_messages = \
-                    self._run_structured(message, full_system)
+                    self._run_structured(message, full_system, context=context)
             elif self.llm.provider == "anthropic":
                 response, tool_call_count, input_tokens, output_tokens, new_messages = \
                     self._run_anthropic_loop(message, full_system, available_tools)
@@ -1616,7 +1616,7 @@ class Agent:
         "Include a memory_store action to log what you did.\n"
     )
 
-    def _run_structured(self, task: str, system: str) -> tuple[str, int, int, int, list[dict]]:
+    def _run_structured(self, task: str, system: str, context: dict = None) -> tuple[str, int, int, int, list[dict]]:
         """
         Two-phase structured execution — NO tool_use, NO tool schemas.
 
@@ -1628,6 +1628,9 @@ class Agent:
         Phase 3 — COMPOSE: LLM sees results, outputs final actions (post, like, store)
         Phase 4 — EXECUTE ACTIONS: Python runs them
 
+        When context["batch"] is True and the LLM provider is xAI, uses the
+        xAI Batch API (50% cost discount) with automatic fallback to real-time.
+
         Returns same tuple as _run_anthropic_loop() for compatibility:
             (response_text, tool_call_count, input_tokens, output_tokens, new_messages)
         """
@@ -1635,9 +1638,25 @@ class Agent:
         total_output = 0
         tool_call_count = 0
         available = set(self._get_available_tools())
+        use_batch = bool(context and context.get("batch") and self.llm.batch_client)
 
         def _llm_call(sys: str, user_msg: str) -> tuple[str, int, int]:
-            """Single Anthropic call — no tools param, just text in/out."""
+            """LLM call — uses batch API when available, falls back to real-time."""
+            if use_batch:
+                try:
+                    logger.info(f"{self.config.name}: structured: using xAI batch API")
+                    resp = self.llm.batch_client.submit_and_wait(
+                        model=self.llm.model,
+                        system=sys,
+                        user_msg=user_msg,
+                        max_tokens=4096,
+                        temperature=self.config.temperature,
+                    )
+                    return resp.text, resp.input_tokens, resp.output_tokens
+                except (TimeoutError, RuntimeError) as e:
+                    logger.warning(f"{self.config.name}: batch API failed ({e}), falling back to real-time")
+
+            # Real-time fallback (or non-batch mode)
             response = self.llm.anthropic_client.messages.create(
                 model=self.llm.model,
                 max_tokens=4096,

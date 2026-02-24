@@ -2628,8 +2628,8 @@ def cmd_start(foreground: bool = False, _daemon_child: bool = False, port: int =
             # Enable reflection for scheduled tasks — helps agents learn from runs
             agent_config.reflection_enabled = True
             # Cap tool rounds for scheduled runs (prevents runaway cost)
-            # Skip for structured mode — it doesn't loop, so rounds are irrelevant
-            if agent_config.schedule_run_mode != "structured":
+            # Skip for structured/batch mode — they don't loop, so rounds are irrelevant
+            if agent_config.schedule_run_mode not in ("structured", "batch"):
                 agent_config.max_tool_rounds = min(
                     agent_config.max_tool_rounds, agent_config.schedule_max_tool_rounds
                 )
@@ -2640,9 +2640,13 @@ def cmd_start(foreground: bool = False, _daemon_child: bool = False, port: int =
             # overflow on multi-tool runs.
             agent.history = []
             # Use structured mode (no tool_use, 2 LLM calls) if configured
+            # Batch mode implies structured + xAI batch API (50% cost discount)
             ctx = {"scheduled": True}
             if agent_config.schedule_run_mode == "structured":
                 ctx["structured"] = True
+            elif agent_config.schedule_run_mode == "batch":
+                ctx["structured"] = True
+                ctx["batch"] = True
             result = agent.run(task, context=ctx)
 
             # Snapshot the scheduled run's conversation before it's lost

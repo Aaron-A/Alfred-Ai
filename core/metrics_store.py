@@ -96,9 +96,13 @@ class MetricsStore:
         "claude-haiku-3-5": {"input": 0.80, "output": 4.0},
         "claude-opus-4-6": {"input": 15.0, "output": 75.0},
         "claude-opus-4": {"input": 15.0, "output": 75.0},
-        # xAI
-        "grok-3-fast": {"input": 5.0, "output": 25.0},
-        "grok-4-1-fast-reasoning": {"input": 5.0, "output": 25.0},
+        # xAI (https://docs.x.ai/developers/models)
+        "grok-4": {"input": 3.0, "output": 15.0},
+        "grok-4-fast": {"input": 2.0, "output": 10.0},
+        "grok-4-1-fast-reasoning": {"input": 0.20, "output": 0.50},
+        "grok-3": {"input": 3.0, "output": 15.0},
+        "grok-3-fast": {"input": 0.20, "output": 0.50},
+        "grok-3-mini": {"input": 0.30, "output": 0.50},
         # OpenAI
         "gpt-5.2": {"input": 5.0, "output": 15.0},
         "gpt-4o": {"input": 2.50, "output": 10.0},
@@ -111,7 +115,9 @@ class MetricsStore:
         "claude-haiku": {"input": 0.80, "output": 4.0},
         "claude-sonnet": {"input": 3.0, "output": 15.0},
         "claude-opus": {"input": 15.0, "output": 75.0},
-        "grok": {"input": 5.0, "output": 25.0},
+        "grok-4": {"input": 3.0, "output": 15.0},
+        "grok-3": {"input": 3.0, "output": 15.0},
+        "grok": {"input": 3.0, "output": 15.0},
         "gpt": {"input": 5.0, "output": 15.0},
     }
 
