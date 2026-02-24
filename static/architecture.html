@@ -808,7 +808,7 @@ svg { display: block; margin: 0 auto; }
 <div class="diagram-section">
   <h2>Structured Execution Flow <span style="font-weight:400;letter-spacing:1px;font-size:9px;color:var(--text-dim);margin-left:8px">(SCHEDULED RUNS &middot; NO TOOL_USE)</span></h2>
 
-  <svg viewBox="0 0 900 520" style="width:100%;max-width:900px;height:auto;">
+  <svg viewBox="0 0 900 660" style="width:100%;max-width:900px;height:auto;">
     <defs>
       <marker id="seq2-arrowhead" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto">
         <path d="M0,0 L7,2.5 L0,5 Z" fill="#22c55e"/>
@@ -843,94 +843,94 @@ svg { display: block; margin: 0 auto; }
     </g>
 
     <!-- Lifelines -->
-    <line x1="85"  y1="44" x2="85"  y2="500" class="seq-lifeline"/>
-    <line x1="260" y1="44" x2="260" y2="500" class="seq-lifeline"/>
-    <line x1="490" y1="44" x2="490" y2="500" class="seq-lifeline"/>
-    <line x1="700" y1="44" x2="700" y2="500" class="seq-lifeline"/>
+    <line x1="85"  y1="44" x2="85"  y2="640" class="seq-lifeline"/>
+    <line x1="260" y1="44" x2="260" y2="640" class="seq-lifeline"/>
+    <line x1="490" y1="44" x2="490" y2="640" class="seq-lifeline"/>
+    <line x1="700" y1="44" x2="700" y2="640" class="seq-lifeline"/>
 
     <!-- Activation bars -->
-    <rect x="254" y="68"  width="12" height="400" class="seq-activation"/>
-    <rect x="484" y="120" width="12" height="60"  class="seq-activation"/>
-    <rect x="694" y="215" width="12" height="55"  class="seq-activation"/>
-    <rect x="484" y="310" width="12" height="60"  class="seq-activation"/>
-    <rect x="694" y="395" width="12" height="50"  class="seq-activation"/>
+    <rect x="254" y="68"  width="12" height="540" class="seq-activation"/>
+    <rect x="484" y="168" width="12" height="55"  class="seq-activation"/>
+    <rect x="694" y="280" width="12" height="58"  class="seq-activation"/>
+    <rect x="484" y="395" width="12" height="55"  class="seq-activation"/>
+    <rect x="694" y="505" width="12" height="55"  class="seq-activation"/>
 
     <!-- 1. Scheduler -> Agent: task -->
-    <line x1="85" y1="78" x2="254" y2="78" class="seq-arrow" stroke="#22c55e" marker-end="url(#seq2-arrowhead)"/>
-    <text x="170" y="70" class="seq-label" text-anchor="middle">scheduled task</text>
+    <line x1="85" y1="80" x2="254" y2="80" class="seq-arrow" stroke="#22c55e" marker-end="url(#seq2-arrowhead)"/>
+    <text x="170" y="72" class="seq-label" text-anchor="middle">scheduled task</text>
 
     <!-- 2. Agent self: build system prompt -->
-    <path d="M266,95 L300,95 L300,108 L266,108" class="seq-arrow" stroke="#a855f7" fill="none" marker-end="url(#seq2-arrowhead-purple)"/>
-    <text x="310" y="99" class="seq-label" text-anchor="start">build system prompt</text>
-    <text x="310" y="112" class="seq-label" text-anchor="start" fill="#555">SOUL + AGENTS + USER + TOOLS.md (no schemas)</text>
+    <path d="M266,100 L300,100 L300,113 L266,113" class="seq-arrow" stroke="#a855f7" fill="none" marker-end="url(#seq2-arrowhead-purple)"/>
+    <text x="310" y="104" class="seq-label" text-anchor="start">build system prompt</text>
+    <text x="310" y="118" class="seq-label" text-anchor="start" fill="#555">SOUL + AGENTS + USER + TOOLS.md (no schemas)</text>
 
     <!-- PHASE 1 box -->
-    <rect x="230" y="118" width="290" height="72" rx="3" fill="none" stroke="#22c55e" stroke-width="1" stroke-dasharray="6,3"/>
-    <rect x="230" y="118" width="90" height="16" rx="0" ry="0" fill="#1a1a1a" stroke="#22c55e" stroke-width="1"/>
-    <text x="240" y="129" class="seq-label" fill="#22c55e" font-size="8" font-weight="600">PHASE 1</text>
-    <text x="328" y="129" class="seq-label" fill="#888" font-size="8">gather plan</text>
+    <rect x="230" y="145" width="290" height="88" rx="3" fill="none" stroke="#22c55e" stroke-width="1" stroke-dasharray="6,3"/>
+    <rect x="230" y="145" width="90" height="16" rx="0" ry="0" fill="#1a1a1a" stroke="#22c55e" stroke-width="1"/>
+    <text x="240" y="156" class="seq-label" fill="#22c55e" font-size="8" font-weight="600">PHASE 1</text>
+    <text x="328" y="156" class="seq-label" fill="#888" font-size="8">gather plan</text>
 
     <!-- 3. Agent -> LLM: gather plan request -->
-    <line x1="266" y1="142" x2="484" y2="142" class="seq-arrow" stroke="#22c55e" marker-end="url(#seq2-arrowhead)"/>
-    <text x="375" y="134" class="seq-label" text-anchor="middle">task + "output JSON gather plan"</text>
+    <line x1="266" y1="180" x2="484" y2="180" class="seq-arrow" stroke="#22c55e" marker-end="url(#seq2-arrowhead)"/>
+    <text x="375" y="170" class="seq-label" text-anchor="middle">task + "output JSON gather plan"</text>
 
     <!-- 4. LLM -> Agent: JSON gather -->
-    <line x1="484" y1="168" x2="266" y2="168" class="seq-arrow seq-arrow-dashed" marker-end="url(#seq2-arrowhead-dashed)"/>
-    <text x="375" y="160" class="seq-label" text-anchor="middle">{"gather": [{"tool": "...", "params": {...}}]}</text>
+    <line x1="484" y1="215" x2="266" y2="215" class="seq-arrow seq-arrow-dashed" marker-end="url(#seq2-arrowhead-dashed)"/>
+    <text x="375" y="205" class="seq-label" text-anchor="middle">{"gather": [{"tool": "...", "params": {...}}]}</text>
 
     <!-- PHASE 2 box -->
-    <rect x="230" y="198" width="500" height="82" rx="3" fill="none" stroke="#f97316" stroke-width="1" stroke-dasharray="6,3"/>
-    <rect x="230" y="198" width="90" height="16" rx="0" ry="0" fill="#1a1a1a" stroke="#f97316" stroke-width="1"/>
-    <text x="240" y="209" class="seq-label" fill="#f97316" font-size="8" font-weight="600">PHASE 2</text>
-    <text x="328" y="209" class="seq-label" fill="#888" font-size="8">execute gathers</text>
+    <rect x="230" y="258" width="500" height="88" rx="3" fill="none" stroke="#f97316" stroke-width="1" stroke-dasharray="6,3"/>
+    <rect x="230" y="258" width="90" height="16" rx="0" ry="0" fill="#1a1a1a" stroke="#f97316" stroke-width="1"/>
+    <text x="240" y="269" class="seq-label" fill="#f97316" font-size="8" font-weight="600">PHASE 2</text>
+    <text x="328" y="269" class="seq-label" fill="#888" font-size="8">execute gathers</text>
 
     <!-- 5. Agent -> Tools: execute gathers -->
-    <line x1="266" y1="228" x2="694" y2="228" class="seq-arrow" stroke="#22c55e" marker-end="url(#seq2-arrowhead)"/>
-    <text x="480" y="220" class="seq-label" text-anchor="middle">execute gather tools (Python)</text>
+    <line x1="266" y1="293" x2="694" y2="293" class="seq-arrow" stroke="#22c55e" marker-end="url(#seq2-arrowhead)"/>
+    <text x="480" y="283" class="seq-label" text-anchor="middle">execute gather tools (Python)</text>
 
     <!-- 6. Tools -> Agent: results -->
-    <line x1="694" y1="258" x2="266" y2="258" class="seq-arrow seq-arrow-dashed" marker-end="url(#seq2-arrowhead-dashed)"/>
-    <text x="480" y="250" class="seq-label" text-anchor="middle">search results &middot; metrics &middot; context</text>
+    <line x1="694" y1="328" x2="266" y2="328" class="seq-arrow seq-arrow-dashed" marker-end="url(#seq2-arrowhead-dashed)"/>
+    <text x="480" y="318" class="seq-label" text-anchor="middle">search results &middot; metrics &middot; context</text>
 
     <!-- PHASE 3 box -->
-    <rect x="230" y="290" width="290" height="82" rx="3" fill="none" stroke="#22c55e" stroke-width="1" stroke-dasharray="6,3"/>
-    <rect x="230" y="290" width="90" height="16" rx="0" ry="0" fill="#1a1a1a" stroke="#22c55e" stroke-width="1"/>
-    <text x="240" y="301" class="seq-label" fill="#22c55e" font-size="8" font-weight="600">PHASE 3</text>
-    <text x="328" y="301" class="seq-label" fill="#888" font-size="8">compose actions</text>
+    <rect x="230" y="371" width="290" height="88" rx="3" fill="none" stroke="#22c55e" stroke-width="1" stroke-dasharray="6,3"/>
+    <rect x="230" y="371" width="90" height="16" rx="0" ry="0" fill="#1a1a1a" stroke="#22c55e" stroke-width="1"/>
+    <text x="240" y="382" class="seq-label" fill="#22c55e" font-size="8" font-weight="600">PHASE 3</text>
+    <text x="328" y="382" class="seq-label" fill="#888" font-size="8">action plan</text>
 
     <!-- 7. Agent -> LLM: compose with context -->
-    <line x1="266" y1="320" x2="484" y2="320" class="seq-arrow" stroke="#22c55e" marker-end="url(#seq2-arrowhead)"/>
-    <text x="375" y="312" class="seq-label" text-anchor="middle">task + gathered context</text>
+    <line x1="266" y1="407" x2="484" y2="407" class="seq-arrow" stroke="#22c55e" marker-end="url(#seq2-arrowhead)"/>
+    <text x="375" y="397" class="seq-label" text-anchor="middle">task + gathered context</text>
 
     <!-- 8. LLM -> Agent: JSON actions -->
-    <line x1="484" y1="355" x2="266" y2="355" class="seq-arrow seq-arrow-dashed" marker-end="url(#seq2-arrowhead-dashed)"/>
-    <text x="375" y="347" class="seq-label" text-anchor="middle">{"actions": [...], "summary": "..."}</text>
+    <line x1="484" y1="442" x2="266" y2="442" class="seq-arrow seq-arrow-dashed" marker-end="url(#seq2-arrowhead-dashed)"/>
+    <text x="375" y="432" class="seq-label" text-anchor="middle">{"actions": [...], "summary": "..."}</text>
 
     <!-- PHASE 4 box -->
-    <rect x="230" y="380" width="500" height="72" rx="3" fill="none" stroke="#f97316" stroke-width="1" stroke-dasharray="6,3"/>
-    <rect x="230" y="380" width="90" height="16" rx="0" ry="0" fill="#1a1a1a" stroke="#f97316" stroke-width="1"/>
-    <text x="240" y="391" class="seq-label" fill="#f97316" font-size="8" font-weight="600">PHASE 4</text>
-    <text x="328" y="391" class="seq-label" fill="#888" font-size="8">execute actions</text>
+    <rect x="230" y="484" width="500" height="82" rx="3" fill="none" stroke="#f97316" stroke-width="1" stroke-dasharray="6,3"/>
+    <rect x="230" y="484" width="90" height="16" rx="0" ry="0" fill="#1a1a1a" stroke="#f97316" stroke-width="1"/>
+    <text x="240" y="495" class="seq-label" fill="#f97316" font-size="8" font-weight="600">PHASE 4</text>
+    <text x="328" y="495" class="seq-label" fill="#888" font-size="8">execute actions</text>
 
     <!-- 9. Agent -> Tools: execute actions -->
-    <line x1="266" y1="410" x2="694" y2="410" class="seq-arrow" stroke="#22c55e" marker-end="url(#seq2-arrowhead)"/>
-    <text x="480" y="402" class="seq-label" text-anchor="middle">post tweets &middot; like &middot; store memory</text>
+    <line x1="266" y1="518" x2="694" y2="518" class="seq-arrow" stroke="#22c55e" marker-end="url(#seq2-arrowhead)"/>
+    <text x="480" y="508" class="seq-label" text-anchor="middle">post tweets &middot; like &middot; store memory</text>
 
     <!-- 10. Tools -> Agent: done -->
-    <line x1="694" y1="435" x2="266" y2="435" class="seq-arrow seq-arrow-dashed" marker-end="url(#seq2-arrowhead-dashed)"/>
-    <text x="480" y="427" class="seq-label" text-anchor="middle">execution results</text>
+    <line x1="694" y1="548" x2="266" y2="548" class="seq-arrow seq-arrow-dashed" marker-end="url(#seq2-arrowhead-dashed)"/>
+    <text x="480" y="538" class="seq-label" text-anchor="middle">execution results</text>
 
     <!-- 11. Agent -> Scheduler: summary -->
-    <line x1="254" y1="470" x2="85" y2="470" class="seq-arrow seq-arrow-dashed" marker-end="url(#seq2-arrowhead-dashed)"/>
-    <text x="170" y="462" class="seq-label" text-anchor="middle">summary response</text>
+    <line x1="254" y1="598" x2="85" y2="598" class="seq-arrow seq-arrow-dashed" marker-end="url(#seq2-arrowhead-dashed)"/>
+    <text x="170" y="588" class="seq-label" text-anchor="middle">summary response</text>
 
     <!-- Cost comparison annotation -->
-    <text x="770" y="120" class="seq-label" fill="#22c55e" font-size="9" font-weight="600">2 LLM calls</text>
-    <text x="770" y="133" class="seq-label" fill="#555" font-size="8">~10K tokens</text>
-    <text x="770" y="146" class="seq-label" fill="#555" font-size="8">0 tool schemas</text>
-    <text x="770" y="166" class="seq-label" fill="#555" font-size="8">vs tool_use loop:</text>
-    <text x="770" y="179" class="seq-label" fill="#ef4444" font-size="8">15 LLM calls</text>
-    <text x="770" y="192" class="seq-label" fill="#ef4444" font-size="8">~300K tokens</text>
+    <text x="770" y="155" class="seq-label" fill="#22c55e" font-size="9" font-weight="600">2 LLM calls</text>
+    <text x="770" y="170" class="seq-label" fill="#555" font-size="8">~10K tokens</text>
+    <text x="770" y="185" class="seq-label" fill="#555" font-size="8">0 tool schemas</text>
+    <text x="770" y="208" class="seq-label" fill="#555" font-size="8">vs tool_use loop:</text>
+    <text x="770" y="223" class="seq-label" fill="#ef4444" font-size="8">15 LLM calls</text>
+    <text x="770" y="238" class="seq-label" fill="#ef4444" font-size="8">~300K tokens</text>
   </svg>
 </div>
 
