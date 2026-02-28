@@ -180,16 +180,26 @@ function fmtTime(iso) {
   return iso.slice(0, 16).replace('T', ' ');
 }
 
+function fmtEST(iso) {
+  if (!iso) return '';
+  return new Date(iso).toLocaleString('en-US', {
+    timeZone: 'America/New_York',
+    month: 'short', day: 'numeric',
+    hour: 'numeric', minute: '2-digit',
+    hour12: true
+  }) + ' EST';
+}
+
 function fmtRelative(iso) {
   if (!iso) return '-';
   const diff = Date.now() - new Date(iso).getTime();
   const mins = Math.floor(diff / 60000);
-  if (mins < 1) return 'just now';
-  if (mins < 60) return mins + 'm ago';
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return hrs + 'h ago';
-  const days = Math.floor(hrs / 24);
-  return days + 'd ago';
+  let rel;
+  if (mins < 1) rel = 'just now';
+  else if (mins < 60) rel = mins + 'm ago';
+  else if (mins < 1440) rel = Math.floor(mins / 60) + 'h ago';
+  else rel = Math.floor(mins / 1440) + 'd ago';
+  return `<span title="${fmtEST(iso)}">${rel}</span>`;
 }
 
 function escHtml(s) {
@@ -964,12 +974,8 @@ function fmtRelative_future(iso) {
   const diff = new Date(iso).getTime() - Date.now();
   if (diff < 0) return 'now';
   const mins = Math.floor(diff / 60000);
-  if (mins < 60) return `<span class="text-green">${mins}m</span>`;
-  const hrs = Math.floor(mins / 60);
-  const remainMins = mins % 60;
-  if (hrs < 24) return `<span class="text-green">${hrs}h ${remainMins}m</span>`;
-  const days = Math.floor(hrs / 24);
-  return `<span class="text-green">${days}d ${hrs % 24}h</span>`;
+  const est = fmtEST(iso);
+  return `<span class="text-green" title="${est}">${est}</span>`;
 }
 
 // ─── Schedule: Run Now ───────────────────────────
