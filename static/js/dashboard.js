@@ -190,6 +190,19 @@ function fmtEST(iso) {
   }) + ' EST';
 }
 
+function convertScheduleToEST(desc) {
+  // Convert UTC times in human_schedule strings (e.g. "13:00 weekdays") to EST
+  return desc.replace(/\b(\d{1,2}):(\d{2})\b/g, function(match, h, m) {
+    // Build a UTC date with that hour/minute, then format in EST
+    var d = new Date();
+    d.setUTCHours(parseInt(h), parseInt(m), 0, 0);
+    return d.toLocaleString('en-US', {
+      timeZone: 'America/New_York',
+      hour: 'numeric', minute: '2-digit', hour12: true
+    });
+  });
+}
+
 function fmtRelative(iso) {
   if (!iso) return '-';
   const diff = Date.now() - new Date(iso).getTime();
@@ -956,7 +969,7 @@ function renderSchedulesTable() {
     html += `<tr>
       <td class="fw-600" style="color:var(--text);">${escHtml(s.agent_name)}</td>
       <td style="color:var(--cyan);">${escHtml(s.id)}</td>
-      <td>${escHtml(s.human_schedule || s.cron)}</td>
+      <td>${escHtml(convertScheduleToEST(s.human_schedule || s.cron))}</td>
       <td>${escHtml(task)}</td>
       <td>${statusHtml}</td>
       <td>${runsHtml}</td>
