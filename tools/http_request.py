@@ -27,49 +27,19 @@ _BLOCKED_HOSTS = {
 
 
 # Service-specific auth header injection
-_SERVICE_AUTH_MAP = {
-    "alpaca": lambda headers, creds: headers.update({
-        "APCA-API-KEY-ID": creds.get("api_key", ""),
-        "APCA-API-SECRET-KEY": creds.get("secret_key", ""),
-    }),
-}
+_SERVICE_AUTH_MAP = {}
 
 
 def _inject_service_auth(headers: dict, service_name: str, creds: dict):
     """Inject authentication headers for a known service."""
     injector = _SERVICE_AUTH_MAP.get(service_name)
     if not injector:
-        # Prefix match: alpaca_tsla → alpaca
+        # Prefix match for multi-account services
         base = service_name.split("_")[0]
         injector = _SERVICE_AUTH_MAP.get(base)
     if injector:
         injector(headers, creds)
         logger.debug(f"Auto-injected auth headers for service: {service_name}")
-
-
-def _resolve_service_for_agent(domain_service: str) -> tuple | None:
-    """Resolve correct service when multiple accounts share a domain.
-
-    When two services (e.g. 'alpaca' and 'alpaca_tsla') map to the same domain,
-    the domain map only keeps one (last-write-wins). This function uses
-    ALFRED_WORKSPACE to pick the right credentials for the current agent.
-
-    Convention: btc-trader → 'alpaca', tsla-trader → 'alpaca_tsla'
-    """
-    workspace = os.environ.get("ALFRED_WORKSPACE", "")
-    if not workspace:
-        return None
-    agent_name = Path(workspace).name
-    if not agent_name.endswith("-trader"):
-        return None
-    base = domain_service.split("_")[0]           # alpaca
-    suffix = agent_name.replace("-trader", "")    # btc / tsla
-    target = base if suffix == "btc" else f"{base}_{suffix}"
-    if target != domain_service:
-        creds = config.get_service_credentials(target)
-        if creds:
-            return (target, creds)
-    return None
 
 
 def register(registry: ToolRegistry):
@@ -146,11 +116,6 @@ def http_request(
         if host in domain_map:
             svc = domain_map[host]
             svc_name = svc.get("service", "")
-            # Multi-account: resolve agent-specific service credentials
-            override = _resolve_service_for_agent(svc_name)
-            if override:
-                svc_name, agent_creds = override
-                svc = {"service": svc_name, **agent_creds}
             _inject_service_auth(req_headers, svc_name, svc)
     except Exception as e:
         logger.warning(f"Service auth injection failed: {e}")

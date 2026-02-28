@@ -136,7 +136,7 @@ class MemoryStore:
         memory with near-identical entries.
 
         Args:
-            record: Any MemoryRecord subclass (TradeMemory, TweetMemory, etc.)
+            record: Any MemoryRecord subclass (TweetMemory, etc.)
             dedup: If True, check for near-duplicates before storing (default True)
 
         Returns:
@@ -319,12 +319,11 @@ class MemoryStore:
 
         Args:
             query: Natural language search query
-            memory_type: Filter to a specific memory type (e.g., "trade", "tweet")
+            memory_type: Filter to a specific memory type (e.g., "tweet")
                         If None, searches all memory tables.
             top_k: Number of results to return
-            where: SQL-like filter string (e.g., "symbol = 'TSLA' AND outcome = 'win'")
+            where: SQL-like filter string for structured filtering
             filters: Dict of field->value for structured filtering
-                    (e.g., {"symbol": "BTC/USD", "outcome": "win"})
 
         Returns:
             List of dicts with memory fields + _relevance_score (hybrid) or _distance (vector)

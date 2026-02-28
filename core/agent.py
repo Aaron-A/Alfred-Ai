@@ -128,8 +128,8 @@ class Agent:
     5. Auto-generate TOOLS.md from current registry state
 
     Usage:
-        agent = Agent(AgentConfig(name="trader", workspace="./workspaces/trader"))
-        response = agent.run("What TSLA setups look good today?")
+        agent = Agent(AgentConfig(name="researcher", workspace="./workspaces/researcher"))
+        response = agent.run("Research the latest developments in AI")
     """
 
     def __init__(self, agent_config: AgentConfig, registry: ToolRegistry = None,
@@ -567,8 +567,8 @@ class Agent:
         4. PRE-COMPACTION FLUSH: Before dropping messages, summarize and store
            them in vector memory so important context isn't lost.
 
-        The flush prevents context amnesia during long sessions. When the trader
-        runs 30+ tool calls analyzing BTC, the early analysis gets preserved
+        The flush prevents context amnesia during long sessions. When an agent
+        runs 30+ tool calls during a task, the early analysis gets preserved
         in memory before it falls off the context window.
         """
         max_turns = self.config.session_max_turns
@@ -799,13 +799,12 @@ class Agent:
 
     # Tools whose output should never be summarized (already concise or structured)
     # X tools: search results contain tweet IDs needed for likes/replies
-    # Trading tools: Alpaca JSON has precise equity/position data needed for decisions
     _SKIP_SUMMARIZE_TOOLS = {"memory_search", "memory_store", "memory_search_global",
                               "memory_update", "memory_link",
                               "check_inbox", "send_message", "delegate_to",
                               "switch_model", "tool_list", "tool_search",
                               "x_search_tweets", "x_api", "x_get_metrics",
-                              "http_request", "trading_bot",
+                              "http_request",
                               "schedule_manage"}
 
     def _maybe_summarize_tool_result(self, tool_name: str, result: str) -> str:
@@ -2205,16 +2204,6 @@ class Agent:
             line = f"{i}. [{mtype}] (relevance: {relevance:.0%}) {content[:200]}"
 
             # Add key structured fields based on type
-            if mtype == "trade":
-                symbol = mem.get("symbol", "")
-                outcome = mem.get("outcome", "")
-                pnl = mem.get("pnl", 0)
-                if symbol:
-                    line += f"\n   {symbol} {mem.get('strategy', '')} -> {outcome} (${pnl:+.2f})"
-                lessons = mem.get("lessons", "")
-                if lessons:
-                    line += f"\n   Lessons: {lessons[:150]}"
-
             lines.append(line)
 
         return "\n".join(lines)

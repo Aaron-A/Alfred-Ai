@@ -26,7 +26,6 @@ Alfred is a lightweight framework for building persistent AI agents. Each agent 
 - **Secret sanitization** — automatic redaction of API keys and tokens in agent responses
 - **HTTP API** — REST endpoints for integration with scripts, apps, and UIs
 - **Discord integration** — map agents to Discord channels with one command
-- **Autonomous processes** — manage long-running bot processes (e.g., BTC trading bot) with PID lifecycle management
 - **Migration** — export, import, and migrate your entire setup between directories or machines
 
 ## Quick Start
@@ -50,7 +49,6 @@ alfred start                     # Start Alfred
 git clone https://github.com/Aaron-A/Alfred-Ai.git
 cd Alfred-Ai
 uv sync                          # Creates venv + installs all dependencies
-uv sync --extra trading          # Include trading bot dependencies (optional)
 sudo ln -sf "$(pwd)/alfred" /usr/local/bin/alfred
 alfred setup
 ```
@@ -157,8 +155,6 @@ The dashboard shows:
 - **+ New Agent** — create agents directly from the dashboard with optional LLM-generated SOUL.md
 - **Schedules tab** — all scheduled tasks with run stats, success rates, next fire time, manual trigger
 - **Metrics tab** — per-model cost breakdown, per-agent detail cards, and vector query logs with relevance scores
-- **Trading tab** — multi-agent view (BTC, TSLA, etc.) with live charts, account equity, positions, bot status, recent trades with P&L and IBKR commission tracking
-
 Auto-refreshes every 10 seconds.
 
 ## Architecture
@@ -184,7 +180,7 @@ alfred-ai/
   core/
     agent.py          Agent loop: recall → think → act → reflect → learn
     alerting.py       Discord + generic webhook alerts (errors, cost, schedule failures, crashes)
-    api.py            FastAPI + trading proxy + agent CRUD + vector queries
+    api.py            FastAPI + agent CRUD + vector queries
     config.py         Config loading/saving (alfred.json)
     discord.py        Bot + daemon + proactive posting
     embeddings.py     Embedding model + LRU cache (256 entries)
@@ -197,14 +193,13 @@ alfred-ai/
     scheduler.py      Cron engine + auto-disable + session/metrics cleanup
     tool_discovery.py Auto-discovery of shared tools
     tool_meta.py      Meta-tools: list, search, create, install, remove
-    templates.py      Agent templates for rapid creation (trader, social, research, etc.)
+    templates.py      Agent templates for rapid creation (social, research, etc.)
     tools.py          Tool registry + memory_update/link
     workspace.py      Workspace creation and management
   cli/
     setup.py          Interactive setup wizard
   models/
     base.py           Base model definitions
-    trade.py          Trading model definitions
     social.py         Social model definitions
   tools/
     web_search.py     Web search (Brave > xAI > DuckDuckGo)
@@ -246,7 +241,7 @@ alfred-ai/
 - **Session snapshots** — on session reset or after scheduled runs, the last 15 meaningful messages (user + assistant only) are saved as a markdown file in `memory/sessions/`. Auto-prunes to 20 snapshots per agent.
 - **Weekly compaction** — a maintenance job prunes old low-importance records to keep the vector store lean.
 - **Memory quotas** — auto-compaction triggers when an agent exceeds 10K memories, keeping the vector store performant.
-- **Outcome linking** — `memory_link` connects decision memories to their trade/action outcomes, enabling causal learning.
+- **Outcome linking** — `memory_link` connects decision memories to their action outcomes, enabling causal learning.
 - **Embedding cache** — a 256-entry LRU cache (SHA-256 keyed) avoids redundant embedding computations.
 
 **Self-learning** is opt-in per agent via `reflection_enabled: true`. After each session, the agent evaluates its own performance, scores its confidence, and stores the assessment as a decision memory. Confidence maps to importance scoring, so lessons from high-confidence sessions rank higher in future recall.
@@ -283,8 +278,6 @@ Tool execution includes **auto-retry** on transient errors (timeout, 429, 503) w
 **Streaming** is supported across all providers. The API offers an SSE endpoint (`/v1/chat/stream`) for real-time token streaming. Discord supports optional progressive message editing.
 
 **Discord integration** maps channels to agents. Each channel gets its own agent instance for thread safety. Scheduled task results are automatically posted to the agent's Discord channel. Configure with `alfred discord setup`, then `alfred start` launches the bot automatically.
-
-**Autonomous processes** like the BTC trading bot are managed via PID lifecycle. The bot auto-starts when Alfred starts, auto-stops (with graceful position exit) when Alfred stops, and has a morning health check schedule as a safety net.
 
 ## Configuration
 
@@ -398,7 +391,6 @@ GET  /v1/metrics           Agent activity metrics (with cost data)
 GET  /v1/vector-queries    Vector memory query logs
 GET  /v1/schedules         All scheduled tasks
 POST /v1/schedules/{id}/run  Manually trigger a schedule
-GET  /v1/trading/status    Trading bot status + Alpaca account info
 GET  /v1/status            System status
 GET  /v1/providers         Provider/model registry for UI dropdowns
 POST /v1/admin/reload      Restart the daemon to pick up config changes
@@ -417,11 +409,6 @@ curl -X POST http://localhost:7700/v1/chat \
 curl -N http://localhost:7700/v1/chat/stream \
   -H "Content-Type: application/json" \
   -d '{"agent": "alfred", "message": "Tell me a story"}'
-
-# Webhook (external event trigger)
-curl -X POST http://localhost:7700/v1/webhook/trader \
-  -H "Content-Type: application/json" \
-  -d '{"event": "price_alert", "message": "TSLA dropped 5%", "data": {"symbol": "TSLA"}}'
 
 # Create a new agent with LLM-generated personality
 curl -X POST http://localhost:7700/v1/agents \
@@ -509,7 +496,6 @@ Built with the help of:
 - [LanceDB](https://lancedb.com) — embedded vector database powering agent memory
 - [Sentence Transformers](https://sbert.net) — local embedding models for semantic search
 - [FastAPI](https://fastapi.tiangolo.com) — async web framework for the REST API and dashboard
-- [Alpaca](https://alpaca.markets) — commission-free trading API for paper and live trading
 - [Ollama](https://ollama.com) — local LLM inference
 - [Discord.py](https://discordpy.readthedocs.io) — Discord bot framework
 - [Brave Search](https://brave.com/search/api/) — web search API

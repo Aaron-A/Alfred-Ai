@@ -66,7 +66,6 @@
   <button class="tab-btn active" data-tab="agents">AGENTS</button>
   <button class="tab-btn" data-tab="schedules">SCHEDULES</button>
   <button class="tab-btn" data-tab="metrics">METRICS</button>
-  <button class="tab-btn" data-tab="trading">TRADING</button>
 </div>
 
 <!-- ═════════ AGENTS TAB ═════════ -->
@@ -190,70 +189,6 @@
   </div>
 </div>
 
-<!-- ═════════ TRADING TAB ═════════ -->
-<div class="tab-panel" id="tab-trading">
-
-  <!-- Agent Selector -->
-  <div class="trading-agent-tabs" id="tradingAgentTabs"></div>
-
-  <!-- Status Cards -->
-  <div class="trading-status-grid" id="tradingStatusGrid">
-    <div class="trading-card">
-      <div class="trading-card-label">ACCOUNT EQUITY</div>
-      <div class="trading-card-value" id="tradingEquity">—</div>
-      <div class="trading-card-sub" id="tradingEquitySub">&nbsp;</div>
-    </div>
-    <div class="trading-card">
-      <div class="trading-card-label">POSITION</div>
-      <div class="trading-card-value" id="tradingPosition">—</div>
-      <div class="trading-card-sub" id="tradingPositionSub">&nbsp;</div>
-    </div>
-    <div class="trading-card">
-      <div class="trading-card-label">BOT STATUS</div>
-      <div class="trading-card-value" id="tradingBotStatus">—</div>
-      <div class="trading-card-sub" id="tradingBotSub">&nbsp;</div>
-    </div>
-    <div class="trading-card">
-      <div class="trading-card-label">TOTAL P&L</div>
-      <div class="trading-card-value" id="tradingPnl">—</div>
-      <div class="trading-card-sub" id="tradingPnlSub">&nbsp;</div>
-    </div>
-  </div>
-
-  <!-- Price Chart -->
-  <div class="chart-container">
-    <div class="chart-header">
-      <span class="section-title" style="margin:0;" id="chartSymbol">—</span>
-      <div class="chart-price-group">
-        <span class="chart-price" id="chartPrice">—</span>
-        <span class="chart-change" id="chartChange"></span>
-      </div>
-      <span class="chart-timeframe" id="chartTimeframe">bars</span>
-    </div>
-    <canvas id="tradingChart"></canvas>
-  </div>
-
-  <!-- Recent Trades -->
-  <div class="section-title" style="margin-top:28px;">RECENT TRADES</div>
-  <div class="table-wrap table-wrap--scroll">
-    <table class="data-table" id="tradesTable">
-      <thead>
-        <tr>
-          <th>Time</th>
-          <th>Direction</th>
-          <th>Qty</th>
-          <th>Entry</th>
-          <th>Exit</th>
-          <th>P&L</th>
-          <th>Reason</th>
-        </tr>
-      </thead>
-      <tbody id="tradesBody">
-        <tr><td colspan="7" class="text-dim" style="text-align:center;padding:24px;">No trades yet</td></tr>
-      </tbody>
-    </table>
-  </div>
-</div>
 
 <!-- ═════════ CONFIG MODAL ═════════ -->
 <div class="modal-overlay" id="configModal">

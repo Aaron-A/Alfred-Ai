@@ -27,6 +27,11 @@
   --text-muted: #888;
   --text-dim: #555;
   --radius: 4px;
+  --transition: all 0.15s ease;
+  --overlay: rgba(0,0,0,0.6);
+  --drawer-bg: #0c0c0c;
+  --card-bg: rgba(255,255,255,0.015);
+  --card-bg-hover: rgba(255,255,255,0.03);
 }
 
 body {
@@ -71,73 +76,139 @@ body {
 }
 .header-right a:hover { color: var(--cyan); }
 
-/* ═══════ DIAGRAM CANVAS ═══════ */
-svg { display: block; margin: 0 auto; }
+/* ═══════ TAB NAVIGATION ═══════ */
+.arch-tabs {
+  display: flex;
+  gap: 2px;
+  margin-bottom: 20px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0;
+}
+.arch-tab {
+  font-family: inherit;
+  font-size: 9px;
+  letter-spacing: 1.5px;
+  padding: 10px 18px;
+  background: transparent;
+  border: none;
+  color: var(--text-dim);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: var(--transition);
+  white-space: nowrap;
+}
+.arch-tab:hover { color: var(--text); }
+.arch-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+.arch-panel { display: none; animation: fadeUp 0.2s ease; }
+.arch-panel.active { display: block; }
+@keyframes fadeUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 
-.diagram-section {
+/* ═══════ SECTION CARDS ═══════ */
+.arch-section {
   background: var(--surface);
   border: 1px solid var(--border);
+  padding: 24px;
   border-radius: var(--radius);
-  padding: 28px;
-  margin-bottom: 24px;
-  overflow-x: auto;
+  margin-bottom: 16px;
 }
-.diagram-section h2 {
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 3px;
-  text-transform: uppercase;
+.arch-section-title {
+  font-size: 10px;
+  letter-spacing: 1.5px;
+  color: var(--text-dim);
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+.arch-section-desc {
+  font-size: 12px;
   color: var(--text-muted);
-  margin-bottom: 24px;
+  line-height: 1.8;
+  margin-bottom: 20px;
 }
 
-/* ═══════ SVG STYLES ═══════ */
-.node-group rect, .node-group .db-shape {
-  rx: 4;
-  ry: 4;
-  stroke-width: 1.5;
-  cursor: pointer;
-  transition: filter 0.2s, stroke-width 0.2s;
-}
-.node-group:hover rect,
-.node-group:hover .db-shape { filter: brightness(1.2); }
-
-.node-label {
-  font-family: 'JetBrains Mono', monospace;
-  fill: #e5e5e5;
+/* ═══════ FLOW DIAGRAM ═══════ */
+.flow-container { display: flex; flex-direction: column; gap: 0; align-items: center; }
+.flow-row { display: flex; gap: 12px; align-items: center; justify-content: center; flex-wrap: wrap; width: 100%; }
+.flow-node {
+  padding: 12px 18px;
+  border-radius: var(--radius);
   font-size: 11px;
-  text-anchor: middle;
-  dominant-baseline: central;
-  pointer-events: none;
+  text-align: center;
+  cursor: pointer;
+  transition: var(--transition);
+  border: 1px solid;
+  min-width: 120px;
+  position: relative;
 }
-.node-sublabel {
-  font-family: 'JetBrains Mono', monospace;
-  fill: #888;
-  font-size: 9px;
-  text-anchor: middle;
-  dominant-baseline: central;
-  pointer-events: none;
-}
+.flow-node:hover { transform: translateY(-2px); filter: brightness(1.2); }
+.flow-node-label { font-weight: 600; letter-spacing: 0.5px; margin-bottom: 2px; }
+.flow-node-sub { font-size: 9px; opacity: 0.7; letter-spacing: 0.3px; }
+.flow-arrow { display: flex; align-items: center; justify-content: center; color: var(--text-dim); font-size: 16px; padding: 4px 0; flex-shrink: 0; }
+.flow-arrow-h { padding: 0 2px; }
+.flow-arrow-v { padding: 6px 0; }
+.flow-row-label { font-size: 8px; letter-spacing: 1.5px; color: var(--text-dim); margin-bottom: 10px; text-align: center; }
 
-.group-label {
-  font-family: 'JetBrains Mono', monospace;
-  fill: #555;
+/* ═══════ NODE COLORS ═══════ */
+.fn-entry { background: rgba(51,65,85,0.15); border-color: rgba(51,65,85,0.5); color: #94a3b8; }
+.fn-core { background: rgba(59,130,246,0.08); border-color: rgba(59,130,246,0.3); color: var(--blue); }
+.fn-agent { background: rgba(34,197,94,0.08); border-color: rgba(34,197,94,0.3); color: var(--green); }
+.fn-tool { background: rgba(168,85,247,0.08); border-color: rgba(168,85,247,0.3); color: var(--purple); }
+.fn-data { background: rgba(234,179,8,0.08); border-color: rgba(234,179,8,0.3); color: var(--yellow); }
+.fn-external { background: rgba(239,68,68,0.08); border-color: rgba(239,68,68,0.3); color: var(--red); }
+.fn-exec { background: rgba(6,182,212,0.08); border-color: rgba(6,182,212,0.3); color: var(--cyan); }
+.fn-neutral { background: var(--card-bg); border-color: var(--border); color: var(--text-muted); }
+
+/* ═══════ PIPELINE ═══════ */
+.pipeline { display: flex; flex-direction: column; gap: 0; align-items: stretch; max-width: 600px; margin: 0 auto; }
+.pipeline-step {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 14px 18px;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: var(--transition);
+}
+.pipeline-step:hover { border-color: var(--border-light); background: var(--card-bg-hover); }
+.pipeline-num { font-size: 16px; font-weight: 800; min-width: 28px; text-align: center; }
+.pipeline-info { flex: 1; }
+.pipeline-name { font-size: 11px; font-weight: 600; letter-spacing: 0.5px; color: var(--text); }
+.pipeline-desc { font-size: 10px; color: var(--text-muted); margin-top: 2px; }
+.pipeline-arrow { text-align: center; color: var(--text-dim); font-size: 14px; padding: 2px 0; }
+
+/* ═══════ TECH STACK ═══════ */
+.stack-grid { display: grid; gap: 16px; }
+.stack-card {
+  padding: 18px;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: var(--transition);
+}
+.stack-card:hover { border-color: var(--border-light); background: var(--card-bg-hover); }
+.stack-title {
   font-size: 9px;
+  letter-spacing: 1.5px;
+  color: var(--accent);
+  margin-bottom: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border);
   font-weight: 600;
-  letter-spacing: 2px;
-  text-transform: uppercase;
-  text-anchor: start;
 }
-
-.edge {
-  stroke-width: 1.2;
-  fill: none;
+.stack-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 5px 0;
+  font-size: 10px;
+  border-bottom: 1px solid var(--border);
 }
-.edge-solid { stroke: #333; }
-.edge-dashed { stroke: #333; stroke-dasharray: 5,4; }
-.edge-data { stroke: #2a2a2a; stroke-dasharray: 3,3; }
-
-.arrowhead { fill: #444; }
+.stack-row:last-child { border-bottom: none; }
+.stack-label { color: var(--text-dim); }
+.stack-value { color: var(--text); font-weight: 500; }
 
 /* ═══════ LEGEND ═══════ */
 .legend {
@@ -161,64 +232,6 @@ svg { display: block; margin: 0 auto; }
   height: 12px;
   border-radius: 2px;
   border: 1px solid rgba(255,255,255,0.1);
-}
-
-/* ═══════ SEQUENCE DIAGRAM ═══════ */
-.seq-lifeline {
-  stroke: #222;
-  stroke-width: 1;
-  stroke-dasharray: 4,4;
-}
-.seq-activation {
-  fill: rgba(255,255,255,0.03);
-  stroke: #333;
-  stroke-width: 1;
-  rx: 2;
-}
-.seq-arrow {
-  stroke-width: 1.3;
-  fill: none;
-  marker-end: url(#seq-arrowhead);
-}
-.seq-arrow-solid { stroke: #06b6d4; }
-.seq-arrow-dashed { stroke: #555; stroke-dasharray: 4,3; }
-.seq-arrow-self { stroke: #a855f7; }
-.seq-label {
-  font-family: 'JetBrains Mono', monospace;
-  fill: #aaa;
-  font-size: 9.5px;
-}
-.seq-participant-box {
-  fill: rgba(255,255,255,0.03);
-  stroke: #333;
-  stroke-width: 1;
-  rx: 3;
-  cursor: pointer;
-  transition: filter 0.2s, stroke-width 0.2s;
-}
-.node-group:hover .seq-participant-box { filter: brightness(1.3); stroke-width: 1.5; }
-.node-group.active .seq-participant-box { filter: brightness(1.4); stroke-width: 2.5; }
-.seq-participant-label {
-  font-family: 'JetBrains Mono', monospace;
-  fill: #e5e5e5;
-  font-size: 10px;
-  font-weight: 600;
-  text-anchor: middle;
-  letter-spacing: 0.5px;
-}
-.seq-loop-box {
-  fill: none;
-  stroke: #333;
-  stroke-width: 1;
-  stroke-dasharray: 6,3;
-  rx: 3;
-}
-.seq-loop-label {
-  font-family: 'JetBrains Mono', monospace;
-  fill: var(--orange);
-  font-size: 9px;
-  font-weight: 600;
-  letter-spacing: 1px;
 }
 
 /* ═══════ FILE TREE ═══════ */
@@ -247,7 +260,6 @@ svg { display: block; margin: 0 auto; }
 .tree-group h3.clr-green { color: var(--green); }
 .tree-group h3.clr-orange { color: var(--orange); }
 .tree-group h3.clr-yellow { color: var(--yellow); }
-
 .tree-file {
   display: flex;
   justify-content: space-between;
@@ -262,115 +274,90 @@ svg { display: block; margin: 0 auto; }
 .tree-desc { color: var(--text-dim); font-size: 10px; text-align: right; }
 .tree-file > .tree-desc:only-child { text-align: left; }
 
-/* ═══════ DETAIL PANEL ═══════ */
-.node-group.active rect,
-.node-group.active .db-shape { filter: brightness(1.4); stroke-width: 2.5; }
+/* ═══════ DRAWER ═══════ */
+.drawer-backdrop {
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background: var(--overlay); z-index: 200;
+  opacity: 0; visibility: hidden; transition: all 0.3s ease;
+  backdrop-filter: blur(2px); -webkit-backdrop-filter: blur(2px);
+}
+.drawer-backdrop.active { opacity: 1; visibility: visible; }
+.drawer {
+  position: fixed; top: 0; right: 0; bottom: 0; width: 480px;
+  background: var(--drawer-bg); border-left: 1px solid var(--border);
+  z-index: 201; transform: translateX(100%); transition: transform 0.3s ease;
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.drawer.open { transform: translateX(0); }
+.drawer-header {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 20px 24px; border-bottom: 1px solid var(--border); flex-shrink: 0;
+}
+.drawer-title { font-size: 10px; letter-spacing: 1.5px; color: var(--accent); font-weight: 700; }
+.drawer-close {
+  font-size: 18px; color: var(--text-dim); cursor: pointer;
+  background: none; border: 1px solid var(--border); border-radius: 2px;
+  width: 28px; height: 28px; display: flex; align-items: center; justify-content: center;
+  transition: var(--transition); font-family: inherit;
+}
+.drawer-close:hover { color: var(--text); border-color: var(--accent); }
+.drawer-body {
+  flex: 1; overflow-y: auto; padding: 24px;
+  scrollbar-width: thin; scrollbar-color: var(--border-light) transparent;
+}
+.drawer-body::-webkit-scrollbar { width: 4px; }
+.drawer-body::-webkit-scrollbar-track { background: transparent; }
+.drawer-body::-webkit-scrollbar-thumb { background: var(--border-light); border-radius: 2px; }
+.drawer-section { margin-bottom: 20px; }
+.drawer-section-title {
+  font-size: 9px; letter-spacing: 1.5px; color: var(--text-dim);
+  margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid var(--border);
+}
+.drawer-text { font-size: 11px; color: var(--text-muted); line-height: 1.8; margin-bottom: 12px; }
+.drawer-row {
+  display: flex; justify-content: space-between; align-items: flex-start;
+  padding: 8px 10px; font-size: 10px; margin-bottom: 4px;
+  background: var(--card-bg); border: 1px solid var(--border); border-radius: var(--radius);
+}
+.drawer-row-label { color: var(--text-dim); min-width: 80px; flex-shrink: 0; }
+.drawer-row-value { color: var(--text); font-weight: 500; text-align: right; }
+.drawer-code {
+  font-size: 10px; color: var(--accent);
+  background: rgba(255,69,0,0.08); padding: 2px 6px; border-radius: 2px;
+}
+.drawer-highlight {
+  padding: 10px 12px; background: var(--card-bg); border: 1px solid var(--border);
+  border-radius: var(--radius); margin-bottom: 6px; font-size: 10px;
+  color: var(--text-muted); line-height: 1.7;
+}
+.drawer-badge {
+  display: inline-block; font-size: 8px; letter-spacing: 0.5px;
+  padding: 2px 6px; border-radius: 2px; margin-right: 4px; margin-bottom: 4px;
+}
+.drawer-badge--orange { background: rgba(255,69,0,0.12); color: var(--accent); border: 1px solid rgba(255,69,0,0.2); }
+.drawer-badge--green { background: rgba(34,197,94,0.12); color: var(--green); border: 1px solid rgba(34,197,94,0.2); }
+.drawer-badge--blue { background: rgba(59,130,246,0.12); color: var(--blue); border: 1px solid rgba(59,130,246,0.2); }
+.drawer-badge--yellow { background: rgba(234,179,8,0.12); color: var(--yellow); border: 1px solid rgba(234,179,8,0.2); }
+.drawer-badge--red { background: rgba(239,68,68,0.12); color: var(--red); border: 1px solid rgba(239,68,68,0.2); }
+.drawer-badge--purple { background: rgba(192,132,252,0.12); color: #c084fc; border: 1px solid rgba(192,132,252,0.2); }
+.drawer-badge--cyan { background: rgba(6,182,212,0.12); color: var(--cyan); border: 1px solid rgba(6,182,212,0.2); }
 
-#detail-backdrop {
-  position: fixed;
-  inset: 0;
-  background: rgba(0,0,0,0.5);
-  z-index: 900;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.25s;
+/* ═══════ RESPONSIVE ═══════ */
+@media (max-width: 768px) {
+  .arch-tab { padding: 8px 12px; font-size: 8px; }
+  .flow-row { flex-direction: column; }
+  .flow-arrow-h { transform: rotate(90deg); }
+  .drawer { width: 90vw; }
+  .drawer-row { flex-direction: column; gap: 4px; }
+  .stack-grid { grid-template-columns: 1fr !important; }
+  .file-tree { grid-template-columns: 1fr; }
 }
-#detail-backdrop.open {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-#detail-panel {
-  position: fixed;
-  top: 0;
-  right: 0;
-  width: 420px;
-  height: 100vh;
-  background: #0d0d0d;
-  border-left: 1px solid var(--border-light);
-  z-index: 1000;
-  transform: translateX(100%);
-  transition: transform 0.25s ease;
-  overflow-y: auto;
-  padding: 24px 20px;
-  word-break: break-word;
-}
-#detail-panel.open { transform: translateX(0); }
-
-#detail-close {
-  position: absolute;
-  top: 12px;
-  right: 14px;
-  background: none;
-  border: none;
-  color: var(--text-muted);
-  font-size: 22px;
-  cursor: pointer;
-  line-height: 1;
-  padding: 4px 8px;
-  border-radius: 4px;
-  transition: color 0.15s, background 0.15s;
-}
-#detail-close:hover { color: var(--text); background: rgba(255,255,255,0.05); }
-
-#detail-category {
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 2px;
-  text-transform: uppercase;
-  margin-bottom: 6px;
-}
-#detail-title {
-  font-size: 16px;
-  font-weight: 700;
-  color: var(--text);
-  margin-bottom: 14px;
-  font-family: 'JetBrains Mono', monospace;
-}
-#detail-desc {
-  font-size: 12px;
-  color: var(--text-muted);
-  line-height: 1.7;
-  margin-bottom: 18px;
-}
-.detail-section-label {
-  font-size: 9px;
-  font-weight: 600;
-  letter-spacing: 2px;
-  text-transform: uppercase;
-  color: var(--text-dim);
-  margin-bottom: 6px;
-}
-.detail-file {
-  font-size: 11px;
-  color: var(--cyan);
-  padding: 2px 0;
-  font-family: 'JetBrains Mono', monospace;
-}
-.detail-feature {
-  font-size: 11px;
-  color: var(--text-muted);
-  padding: 3px 0;
-  padding-left: 12px;
-  position: relative;
-}
-.detail-feature::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  top: 10px;
-  width: 4px;
-  height: 4px;
-  border-radius: 50%;
-  background: var(--text-dim);
-}
-#detail-files { margin-bottom: 16px; }
-
-@media (max-width: 600px) {
+@media (max-width: 480px) {
   body { padding: 12px 14px; }
-  .diagram-section { padding: 16px; }
-  svg { max-width: 100%; height: auto; }
-  #detail-panel { width: 100%; }
+  .arch-tabs { gap: 0; }
+  .arch-tab { padding: 8px 10px; font-size: 8px; letter-spacing: 1px; }
+  .drawer { width: 95vw; }
+  .flow-node { min-width: 90px; padding: 10px 12px; font-size: 10px; }
 }
 </style>
 </head>
@@ -387,709 +374,666 @@ svg { display: block; margin: 0 auto; }
   </div>
 </header>
 
-<!-- ═══════════════════════════════════════════════════════════
-     SYSTEM OVERVIEW DIAGRAM
-     ═══════════════════════════════════════════════════════════ -->
-<div class="diagram-section">
-  <h2>System Overview</h2>
-
-  <svg viewBox="0 0 960 870" style="width:100%;max-width:960px;height:auto;">
-    <defs>
-      <marker id="arrow" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
-        <path d="M0,0 L8,3 L0,6 Z" class="arrowhead"/>
-      </marker>
-      <marker id="arrow-cyan" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
-        <path d="M0,0 L8,3 L0,6 Z" fill="#0e7490"/>
-      </marker>
-      <marker id="arrow-dashed" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
-        <path d="M0,0 L8,3 L0,6 Z" fill="#555"/>
-      </marker>
-    </defs>
-
-    <!-- ═══════ GROUP: ENTRY POINTS ═══════ -->
-    <rect x="140" y="10" width="680" height="70" rx="4" fill="none" stroke="#2a2a2a" stroke-dasharray="4,3"/>
-    <text x="156" y="28" class="group-label">Entry Points</text>
-
-    <g class="node-group" id="node-cli">
-      <rect x="150" y="36" width="100" height="36" fill="#1e293b" stroke="#334155"/>
-      <text x="200" y="50" class="node-label">CLI</text>
-      <text x="200" y="63" class="node-sublabel">alfred ...</text>
-    </g>
-    <g class="node-group" id="node-discord-bot">
-      <rect x="268" y="36" width="120" height="36" fill="#1e293b" stroke="#334155"/>
-      <text x="328" y="50" class="node-label">Discord Bot</text>
-      <text x="328" y="63" class="node-sublabel">channels</text>
-    </g>
-    <g class="node-group" id="node-rest-api">
-      <rect x="406" y="36" width="120" height="36" fill="#1e293b" stroke="#334155"/>
-      <text x="466" y="50" class="node-label">REST API</text>
-      <text x="466" y="63" class="node-sublabel">:7700</text>
-    </g>
-    <g class="node-group" id="node-dashboard">
-      <rect x="544" y="36" width="120" height="36" fill="#1e293b" stroke="#334155"/>
-      <text x="604" y="50" class="node-label">Dashboard</text>
-      <text x="604" y="63" class="node-sublabel">web UI</text>
-    </g>
-    <g class="node-group" id="node-scheduler">
-      <rect x="682" y="36" width="130" height="36" fill="#1e293b" stroke="#334155"/>
-      <text x="747" y="50" class="node-label">Scheduler</text>
-      <text x="747" y="63" class="node-sublabel">cron &middot; manual trigger</text>
-    </g>
-
-    <!-- Scheduler → Discord: scheduled tasks post results -->
-    <path d="M682,54 Q505,8 388,54" class="edge edge-dashed" stroke="#0e7490" fill="none" marker-end="url(#arrow-cyan)"/>
-    <text x="535" y="20" class="node-sublabel" fill="#0e7490" font-size="8" text-anchor="middle">results</text>
-
-    <!-- Arrows from entry points down to Agent Framework -->
-    <line x1="200" y1="72" x2="483" y2="140" class="edge edge-solid" marker-end="url(#arrow)"/>
-    <line x1="328" y1="72" x2="483" y2="140" class="edge edge-solid" marker-end="url(#arrow)"/>
-    <line x1="466" y1="72" x2="483" y2="140" class="edge edge-solid" marker-end="url(#arrow)"/>
-    <line x1="604" y1="72" x2="483" y2="140" class="edge edge-solid" marker-end="url(#arrow)"/>
-    <line x1="747" y1="72" x2="483" y2="140" class="edge edge-solid" marker-end="url(#arrow)"/>
-
-    <!-- ═══════ GROUP: CORE FRAMEWORK ═══════ -->
-    <rect x="205" y="110" width="555" height="120" rx="4" fill="none" stroke="#1e40af" stroke-opacity="0.4"/>
-    <text x="221" y="128" class="group-label" fill="#3b82f6">Core Framework</text>
-
-    <g class="node-group" id="node-agent-framework">
-      <rect x="373" y="136" width="220" height="36" fill="#172554" stroke="#1e40af"/>
-      <text x="483" y="150" class="node-label">Agent Framework</text>
-      <text x="483" y="163" class="node-sublabel">core/agent.py</text>
-    </g>
-
-    <g class="node-group" id="node-config">
-      <rect x="215" y="186" width="110" height="32" fill="#172554" stroke="#1e40af"/>
-      <text x="270" y="204" class="node-sublabel">core/config.py</text>
-    </g>
-    <g class="node-group" id="node-llm">
-      <rect x="335" y="186" width="110" height="32" fill="#172554" stroke="#1e40af"/>
-      <text x="390" y="204" class="node-sublabel">core/llm.py</text>
-    </g>
-    <g class="node-group" id="node-memory">
-      <rect x="455" y="186" width="140" height="32" fill="#172554" stroke="#1e40af"/>
-      <text x="525" y="204" class="node-sublabel">core/memory.py</text>
-    </g>
-
-    <!-- Agent to sub-modules -->
-    <line x1="423" y1="172" x2="270" y2="186" class="edge edge-data"/>
-    <line x1="483" y1="172" x2="390" y2="186" class="edge edge-data"/>
-    <line x1="543" y1="172" x2="525" y2="186" class="edge edge-data"/>
-
-    <!-- ═══════ GROUP: AGENTS ═══════ -->
-    <rect x="40" y="280" width="240" height="180" rx="4" fill="none" stroke="#166534" stroke-opacity="0.4"/>
-    <text x="56" y="298" class="group-label" fill="#22c55e">Agents</text>
-
-    <g class="node-group" id="node-alfred">
-      <rect x="56" y="308" width="208" height="40" fill="#14532d" stroke="#166534"/>
-      <text x="160" y="323" class="node-label">alfred</text>
-      <text x="160" y="338" class="node-sublabel">General Assistant  &middot;  Claude 4.5 Sonnet</text>
-    </g>
-    <g class="node-group" id="node-btc-trader">
-      <rect x="56" y="358" width="208" height="40" fill="#14532d" stroke="#166534"/>
-      <text x="160" y="373" class="node-label">btc-trader</text>
-      <text x="160" y="388" class="node-sublabel">Market Analyst  &middot;  Claude 4.5 Sonnet</text>
-    </g>
-    <g class="node-group" id="node-xmedia">
-      <rect x="56" y="408" width="208" height="40" fill="#14532d" stroke="#166534"/>
-      <text x="160" y="423" class="node-label">xmedia</text>
-      <text x="160" y="438" class="node-sublabel">X Manager  &middot;  Structured Mode</text>
-    </g>
-
-    <!-- Agent Framework down to Agents group -->
-    <line x1="403" y1="172" x2="264" y2="308" class="edge edge-solid" marker-end="url(#arrow)"/>
-
-    <!-- ═══════ GROUP: SHARED TOOLS ═══════ -->
-    <rect x="320" y="280" width="320" height="210" rx="4" fill="none" stroke="#6b21a8" stroke-opacity="0.4"/>
-    <text x="336" y="298" class="group-label" fill="#a855f7">Tools</text>
-
-    <!-- Shared tools -->
-    <g class="node-group" id="node-web-search">
-      <rect x="336" y="310" width="130" height="28" fill="#3b0764" stroke="#6b21a8"/>
-      <text x="401" y="327" class="node-sublabel">web_search</text>
-    </g>
-    <g class="node-group" id="node-http-request">
-      <rect x="336" y="344" width="130" height="28" fill="#3b0764" stroke="#6b21a8"/>
-      <text x="401" y="361" class="node-sublabel">http_request</text>
-    </g>
-    <g class="node-group" id="node-x-api">
-      <rect x="336" y="378" width="130" height="28" fill="#3b0764" stroke="#6b21a8"/>
-      <text x="401" y="395" class="node-sublabel">x_api</text>
-    </g>
-    <g class="node-group" id="node-fetch-file">
-      <rect x="336" y="412" width="130" height="28" fill="#3b0764" stroke="#6b21a8"/>
-      <text x="401" y="429" class="node-sublabel">fetch_url  &middot;  file_ops</text>
-    </g>
-    <g class="node-group" id="node-calc-datetime">
-      <rect x="336" y="446" width="130" height="28" fill="#3b0764" stroke="#6b21a8"/>
-      <text x="401" y="463" class="node-sublabel">calculator &middot; datetime</text>
-    </g>
-
-    <!-- Built-in tools -->
-    <g class="node-group" id="node-memory-search">
-      <rect x="490" y="310" width="138" height="28" fill="#3b0764" stroke="#6b21a8"/>
-      <text x="559" y="327" class="node-sublabel">memory_search</text>
-    </g>
-    <g class="node-group" id="node-memory-store">
-      <rect x="490" y="344" width="138" height="28" fill="#3b0764" stroke="#6b21a8"/>
-      <text x="559" y="361" class="node-sublabel">memory_store</text>
-    </g>
-    <g class="node-group" id="node-delegate-to">
-      <rect x="490" y="378" width="138" height="28" fill="#3b0764" stroke="#6b21a8"/>
-      <text x="559" y="395" class="node-sublabel">delegate_to</text>
-    </g>
-    <g class="node-group" id="node-send-message">
-      <rect x="490" y="412" width="138" height="28" fill="#3b0764" stroke="#6b21a8"/>
-      <text x="559" y="429" class="node-sublabel">send_message</text>
-    </g>
-    <g class="node-group" id="node-switch-model">
-      <rect x="490" y="446" width="138" height="28" fill="#3b0764" stroke="#6b21a8"/>
-      <text x="559" y="463" class="node-sublabel">switch_model</text>
-    </g>
-
-    <!-- Labels inside tools group -->
-    <text x="401" y="305" class="node-sublabel" font-size="8" fill="#7c3aed" letter-spacing="1">SHARED</text>
-    <text x="559" y="305" class="node-sublabel" font-size="8" fill="#7c3aed" letter-spacing="1">BUILT-IN</text>
-
-    <!-- Agent Framework to Tools -->
-    <line x1="483" y1="218" x2="480" y2="280" class="edge edge-solid" marker-end="url(#arrow)"/>
-
-    <!-- ═══════ ALERTING (small node near Core) ═══════ -->
-    <g class="node-group" id="node-alerting">
-      <rect x="605" y="186" width="140" height="32" fill="#172554" stroke="#1e40af"/>
-      <text x="675" y="204" class="node-sublabel">core/alerting.py</text>
-    </g>
-    <line x1="593" y1="154" x2="605" y2="196" class="edge edge-dashed" marker-end="url(#arrow-dashed)"/>
-
-    <!-- ═══════ GROUP: DATA STORES ═══════ -->
-    <rect x="680" y="280" width="240" height="180" rx="4" fill="none" stroke="#92400e" stroke-opacity="0.4"/>
-    <text x="696" y="298" class="group-label" fill="#f59e0b">Data Stores</text>
-
-    <!-- LanceDB -->
-    <g class="node-group" id="node-lancedb">
-      <rect x="700" y="312" width="200" height="36" fill="#451a03" stroke="#92400e" rx="4"/>
-      <text x="800" y="326" class="node-label">LanceDB</text>
-      <text x="800" y="340" class="node-sublabel">vectors &middot; hybrid search</text>
-    </g>
-    <!-- SQLite -->
-    <g class="node-group" id="node-sqlite">
-      <rect x="700" y="360" width="200" height="36" fill="#451a03" stroke="#92400e" rx="4"/>
-      <text x="800" y="374" class="node-label">SQLite</text>
-      <text x="800" y="388" class="node-sublabel">metrics &middot; cost &middot; vector queries</text>
-    </g>
-    <!-- Sessions -->
-    <g class="node-group" id="node-sessions">
-      <rect x="700" y="408" width="200" height="36" fill="#451a03" stroke="#92400e" rx="4"/>
-      <text x="800" y="422" class="node-label">Session Files</text>
-      <text x="800" y="436" class="node-sublabel">JSON &middot; full tool chain &middot; per channel</text>
-    </g>
-
-    <!-- Core to Data -->
-    <line x1="600" y1="218" x2="800" y2="280" class="edge edge-solid" marker-end="url(#arrow)"/>
-
-    <!-- ═══════ GROUP: TRADING BOT (standalone process) ═══════ -->
-    <rect x="40" y="540" width="240" height="60" rx="4" fill="none" stroke="#0e7490" stroke-opacity="0.4"/>
-    <text x="56" y="558" class="group-label" fill="#06b6d4">Autonomous Process</text>
-
-    <g class="node-group" id="node-trading-bot">
-      <rect x="56" y="564" width="208" height="28" fill="#083344" stroke="#0e7490"/>
-      <text x="160" y="581" class="node-sublabel">BTC Trading Bot  &middot;  BB + RSI</text>
-    </g>
-
-    <!-- Daemon manages bot via PID -->
-    <line x1="160" y1="460" x2="160" y2="564" class="edge edge-dashed" stroke="#0e7490" marker-end="url(#arrow-cyan)"/>
-    <text x="170" y="510" class="node-sublabel" fill="#0e7490" font-size="8">PID mgmt</text>
-
-    <!-- ═══════ GROUP: EXTERNAL SERVICES ═══════ -->
-    <rect x="120" y="660" width="720" height="80" rx="4" fill="none" stroke="#991b1b" stroke-opacity="0.4"/>
-    <text x="136" y="678" class="group-label" fill="#ef4444">External Services</text>
-
-    <g class="node-group" id="node-alpaca">
-      <rect x="136" y="688" width="140" height="40" fill="#450a0a" stroke="#991b1b"/>
-      <text x="206" y="704" class="node-label">Alpaca API</text>
-      <text x="206" y="718" class="node-sublabel">paper trading</text>
-    </g>
-    <g class="node-group" id="node-x-twitter">
-      <rect x="296" y="688" width="150" height="40" fill="#450a0a" stroke="#991b1b"/>
-      <text x="371" y="704" class="node-label">X / Twitter API</text>
-      <text x="371" y="718" class="node-sublabel">OAuth 1.0a</text>
-    </g>
-    <g class="node-group" id="node-brave">
-      <rect x="466" y="688" width="140" height="40" fill="#450a0a" stroke="#991b1b"/>
-      <text x="536" y="704" class="node-label">Brave Search</text>
-      <text x="536" y="718" class="node-sublabel">web results</text>
-    </g>
-    <g class="node-group" id="node-llm-providers">
-      <rect x="626" y="688" width="200" height="40" fill="#450a0a" stroke="#991b1b"/>
-      <text x="726" y="704" class="node-label">LLM Providers</text>
-      <text x="726" y="718" class="node-sublabel">Anthropic &middot; xAI &middot; OpenAI &middot; Ollama</text>
-    </g>
-
-    <!-- Tools to External Services -->
-    <line x1="401" y1="474" x2="206" y2="688" class="edge edge-solid" marker-end="url(#arrow)"/>
-    <line x1="401" y1="474" x2="371" y2="688" class="edge edge-solid" marker-end="url(#arrow)"/>
-    <line x1="401" y1="340" x2="536" y2="688" class="edge edge-solid" marker-end="url(#arrow)"/>
-
-    <!-- Trading Bot to Alpaca (websocket) -->
-    <line x1="160" y1="592" x2="186" y2="688" class="edge edge-solid" stroke="#0e7490" marker-end="url(#arrow-cyan)"/>
-    <text x="100" y="644" class="node-sublabel" fill="#0e7490" font-size="8">websocket + REST</text>
-
-    <!-- LLM to Providers -->
-    <line x1="465" y1="218" x2="726" y2="688" class="edge edge-solid" marker-end="url(#arrow)"/>
-
-    <!-- ═══════ CREDENTIAL FLOW (dashed) ═══════ -->
-    <line x1="345" y1="218" x2="345" y2="310" class="edge edge-dashed" marker-end="url(#arrow-dashed)"/>
-    <text x="285" y="260" class="node-sublabel" fill="#555" font-size="8">credentials</text>
-
-    <!-- ═══════ BOTTOM: CONFIG NOTE ═══════ -->
-    <g class="node-group" id="node-config-file">
-    <rect x="300" y="790" width="360" height="50" rx="4" fill="rgba(255,255,255,0.02)" stroke="#222"/>
-    <text x="480" y="810" class="node-sublabel" text-anchor="middle" fill="#666">alfred.json</text>
-    <text x="480" y="825" class="node-sublabel" text-anchor="middle" fill="#444">providers &middot; agents &middot; services &middot; schedules &middot; discord &middot; alerts</text>
-    </g>
-
-    <line x1="345" y1="218" x2="400" y2="790" class="edge edge-dashed" stroke="#222" marker-end="url(#arrow-dashed)"/>
-  </svg>
-
-  <div class="legend">
-    <div class="legend-item"><div class="legend-swatch" style="background:#1e293b;"></div> Entry Points</div>
-    <div class="legend-item"><div class="legend-swatch" style="background:#172554;"></div> Core Framework</div>
-    <div class="legend-item"><div class="legend-swatch" style="background:#14532d;"></div> Agents</div>
-    <div class="legend-item"><div class="legend-swatch" style="background:#3b0764;"></div> Tools</div>
-    <div class="legend-item"><div class="legend-swatch" style="background:#451a03;"></div> Data Stores</div>
-    <div class="legend-item"><div class="legend-swatch" style="background:#083344;"></div> Autonomous Process</div>
-    <div class="legend-item"><div class="legend-swatch" style="background:#450a0a;"></div> External Services</div>
-    <div class="legend-item"><svg width="24" height="12"><line x1="0" y1="6" x2="24" y2="6" stroke="#555" stroke-dasharray="4,3" stroke-width="1.2"/></svg> Credential flow</div>
-  </div>
+<!-- ═══════ TAB NAVIGATION ═══════ -->
+<div class="arch-tabs">
+  <button class="arch-tab active" onclick="showTab('overview')">OVERVIEW</button>
+  <button class="arch-tab" onclick="showTab('lifecycle')">AGENT LIFECYCLE</button>
+  <button class="arch-tab" onclick="showTab('structured')">STRUCTURED MODE</button>
+  <button class="arch-tab" onclick="showTab('project')">PROJECT STRUCTURE</button>
+  <button class="arch-tab" onclick="showTab('stack')">TECH STACK</button>
 </div>
 
 <!-- ═══════════════════════════════════════════════════════════
-     AGENT EXECUTION FLOW
+     TAB 1: OVERVIEW
      ═══════════════════════════════════════════════════════════ -->
-<div class="diagram-section">
-  <h2>Agent Execution Flow</h2>
-
-  <svg viewBox="0 0 900 620" style="width:100%;max-width:900px;height:auto;">
-    <defs>
-      <marker id="seq-arrowhead" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto">
-        <path d="M0,0 L7,2.5 L0,5 Z" fill="#06b6d4"/>
-      </marker>
-      <marker id="seq-arrowhead-dashed" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto">
-        <path d="M0,0 L7,2.5 L0,5 Z" fill="#555"/>
-      </marker>
-      <marker id="seq-arrowhead-purple" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto">
-        <path d="M0,0 L7,2.5 L0,5 Z" fill="#a855f7"/>
-      </marker>
-      <marker id="seq-arrowhead-green" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto">
-        <path d="M0,0 L7,2.5 L0,5 Z" fill="#22c55e"/>
-      </marker>
-    </defs>
-
-    <!-- Participant boxes -->
-    <g class="node-group" id="node-seq-user">
-      <rect x="40" y="10" width="100" height="34" class="seq-participant-box"/>
-      <text x="90" y="30" class="seq-participant-label">User</text>
-    </g>
-
-    <g class="node-group" id="node-seq-agent">
-      <rect x="200" y="10" width="100" height="34" class="seq-participant-box"/>
-      <text x="250" y="30" class="seq-participant-label">Agent</text>
-    </g>
-
-    <g class="node-group" id="node-seq-memory">
-      <rect x="380" y="10" width="100" height="34" class="seq-participant-box"/>
-      <text x="430" y="30" class="seq-participant-label">Memory</text>
-    </g>
-
-    <g class="node-group" id="node-seq-llm">
-      <rect x="560" y="10" width="100" height="34" class="seq-participant-box"/>
-      <text x="610" y="30" class="seq-participant-label">LLM</text>
-    </g>
-
-    <g class="node-group" id="node-seq-tool">
-      <rect x="720" y="10" width="100" height="34" class="seq-participant-box"/>
-      <text x="770" y="30" class="seq-participant-label">Tool</text>
-    </g>
-
-    <!-- Lifelines -->
-    <line x1="90"  y1="44" x2="90"  y2="600" class="seq-lifeline"/>
-    <line x1="250" y1="44" x2="250" y2="600" class="seq-lifeline"/>
-    <line x1="430" y1="44" x2="430" y2="600" class="seq-lifeline"/>
-    <line x1="610" y1="44" x2="610" y2="600" class="seq-lifeline"/>
-    <line x1="770" y1="44" x2="770" y2="600" class="seq-lifeline"/>
-
-    <!-- Activation bars -->
-    <rect x="244" y="70"  width="12" height="490" class="seq-activation"/>
-    <rect x="424" y="90"  width="12" height="50"  class="seq-activation"/>
-    <rect x="604" y="210" width="12" height="220" class="seq-activation"/>
-    <rect x="764" y="290" width="12" height="70"  class="seq-activation"/>
-
-    <!-- 1. User -> Agent: message -->
-    <line x1="90" y1="80" x2="244" y2="80" class="seq-arrow seq-arrow-solid" marker-end="url(#seq-arrowhead)"/>
-    <text x="167" y="72" class="seq-label" text-anchor="middle">message</text>
-
-    <!-- 2. Agent -> Memory: auto-search (smart recall) -->
-    <line x1="256" y1="100" x2="424" y2="100" class="seq-arrow seq-arrow-solid" marker-end="url(#seq-arrowhead)"/>
-    <text x="340" y="92" class="seq-label" text-anchor="middle">auto-search memories</text>
-
-    <!-- 3. Memory --> Agent: matching context (with relevance gating) -->
-    <line x1="424" y1="120" x2="256" y2="120" class="seq-arrow seq-arrow-dashed" marker-end="url(#seq-arrowhead-dashed)"/>
-    <text x="340" y="112" class="seq-label" text-anchor="middle">matching context</text>
-
-    <!-- Smart recall filter annotation -->
-    <path d="M256,137 L290,137 L290,150 L256,150" class="seq-arrow seq-arrow-self" fill="none" marker-end="url(#seq-arrowhead-purple)"/>
-    <text x="300" y="141" class="seq-label" text-anchor="start" fill="#22c55e">filter by relevance</text>
-    <text x="300" y="153" class="seq-label" text-anchor="start" fill="#555">distance &lt; 0.4 &middot; importance boost &middot; skip short msgs</text>
-
-    <!-- 4. Agent self: build system prompt -->
-    <path d="M256,170 L290,170 L290,190 L256,190" class="seq-arrow seq-arrow-self" fill="none" marker-end="url(#seq-arrowhead-purple)"/>
-    <text x="300" y="177" class="seq-label" text-anchor="start">build system prompt</text>
-    <text x="300" y="190" class="seq-label" text-anchor="start" fill="#555">SOUL + AGENTS + USER + TOOLS + memories</text>
-
-    <!-- 5. Agent -> LLM: prompt + tools -->
-    <line x1="256" y1="220" x2="604" y2="220" class="seq-arrow seq-arrow-solid" marker-end="url(#seq-arrowhead)"/>
-    <text x="430" y="212" class="seq-label" text-anchor="middle">prompt + tools</text>
-
-    <!-- Tool loop box (expanded to show retry + summarize) -->
-    <rect x="220" y="255" width="590" height="150" class="seq-loop-box"/>
-    <rect x="220" y="255" width="120" height="18" rx="0" ry="0" fill="#1a1a1a" stroke="#333" stroke-width="1"/>
-    <text x="230" y="267" class="seq-loop-label">LOOP</text>
-    <text x="348" y="267" class="seq-label" fill="#888">tool rounds (max N)</text>
-
-    <!-- 6. LLM --> Agent: tool_call -->
-    <line x1="604" y1="285" x2="256" y2="285" class="seq-arrow seq-arrow-dashed" marker-end="url(#seq-arrowhead-dashed)"/>
-    <text x="430" y="277" class="seq-label" text-anchor="middle">tool_call(name, args)</text>
-
-    <!-- 7. Agent -> Tool: execute (with retry) -->
-    <line x1="256" y1="310" x2="764" y2="310" class="seq-arrow seq-arrow-solid" marker-end="url(#seq-arrowhead)"/>
-    <text x="510" y="302" class="seq-label" text-anchor="middle">execute (auto-retry on transient errors)</text>
-
-    <!-- 8. Tool --> Agent: result -->
-    <line x1="764" y1="340" x2="256" y2="340" class="seq-arrow seq-arrow-dashed" marker-end="url(#seq-arrowhead-dashed)"/>
-    <text x="510" y="332" class="seq-label" text-anchor="middle">result</text>
-
-    <!-- Summarize annotation -->
-    <text x="510" y="355" class="seq-label" text-anchor="middle" fill="#22c55e" font-size="8">summarize if &gt; 2K chars</text>
-
-    <!-- 9. Agent -> LLM: tool result (summarized) -->
-    <line x1="256" y1="370" x2="604" y2="370" class="seq-arrow seq-arrow-solid" marker-end="url(#seq-arrowhead)"/>
-    <text x="430" y="362" class="seq-label" text-anchor="middle">tool result (summarized)</text>
-
-    <!-- Loop annotation: cost tracking -->
-    <text x="815" y="395" class="seq-label" text-anchor="start" fill="#555" font-size="8">log vector queries</text>
-    <text x="815" y="406" class="seq-label" text-anchor="start" fill="#555" font-size="8">+ cost estimate</text>
-
-    <!-- 10. LLM --> Agent: final response -->
-    <line x1="604" y1="420" x2="256" y2="420" class="seq-arrow seq-arrow-dashed" marker-end="url(#seq-arrowhead-dashed)"/>
-    <text x="430" y="412" class="seq-label" text-anchor="middle">final response</text>
-
-    <!-- 11. Reflection (conditional) -->
-    <rect x="220" y="440" width="440" height="42" rx="3" fill="none" stroke="#22c55e" stroke-width="1" stroke-dasharray="6,3"/>
-    <rect x="220" y="440" width="60" height="16" rx="0" ry="0" fill="#1a1a1a" stroke="#22c55e" stroke-width="1"/>
-    <text x="230" y="451" class="seq-label" fill="#22c55e" font-size="8" font-weight="600">OPT</text>
-    <text x="288" y="451" class="seq-label" fill="#888" font-size="8">reflection enabled</text>
-    <path d="M256,460 L290,460 L290,475 L256,475" class="seq-arrow seq-arrow-self" fill="none" stroke="#22c55e" marker-end="url(#seq-arrowhead-green)"/>
-    <text x="300" y="465" class="seq-label" text-anchor="start" fill="#22c55e">self-evaluate performance</text>
-    <text x="300" y="477" class="seq-label" text-anchor="start" fill="#555">store decision memory &middot; confidence → importance</text>
-
-    <!-- 12. Agent self: save session + daily log + metrics -->
-    <path d="M256,505 L290,505 L290,525 L256,525" class="seq-arrow seq-arrow-self" fill="none" marker-end="url(#seq-arrowhead-purple)"/>
-    <text x="300" y="512" class="seq-label" text-anchor="start">save session + daily log + metrics</text>
-    <text x="300" y="525" class="seq-label" text-anchor="start" fill="#555">JSON session &middot; daily log (memory/YYYY-MM-DD.md) &middot; SQLite metrics &middot; cost tracking</text>
-
-    <!-- 13. Agent --> User: response -->
-    <line x1="244" y1="555" x2="90" y2="555" class="seq-arrow seq-arrow-dashed" marker-end="url(#seq-arrowhead-dashed)"/>
-    <text x="167" y="547" class="seq-label" text-anchor="middle">response</text>
-  </svg>
-</div>
-
-<!-- ═══════════════════════════════════════════════════════════
-     STRUCTURED EXECUTION FLOW
-     ═══════════════════════════════════════════════════════════ -->
-<div class="diagram-section">
-  <h2>Structured Execution Flow <span style="font-weight:400;letter-spacing:1px;font-size:9px;color:var(--text-dim);margin-left:8px">(SCHEDULED RUNS &middot; NO TOOL_USE)</span></h2>
-
-  <svg viewBox="0 0 900 660" style="width:100%;max-width:900px;height:auto;">
-    <defs>
-      <marker id="seq2-arrowhead" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto">
-        <path d="M0,0 L7,2.5 L0,5 Z" fill="#22c55e"/>
-      </marker>
-      <marker id="seq2-arrowhead-dashed" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto">
-        <path d="M0,0 L7,2.5 L0,5 Z" fill="#555"/>
-      </marker>
-      <marker id="seq2-arrowhead-purple" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto">
-        <path d="M0,0 L7,2.5 L0,5 Z" fill="#a855f7"/>
-      </marker>
-      <marker id="seq2-arrowhead-orange" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto">
-        <path d="M0,0 L7,2.5 L0,5 Z" fill="#f97316"/>
-      </marker>
-    </defs>
-
-    <!-- Participant boxes -->
-    <g class="node-group" id="node-seq2-scheduler">
-      <rect x="30" y="10" width="110" height="34" class="seq-participant-box"/>
-      <text x="85" y="30" class="seq-participant-label">Scheduler</text>
-    </g>
-    <g class="node-group" id="node-seq2-agent">
-      <rect x="210" y="10" width="100" height="34" class="seq-participant-box"/>
-      <text x="260" y="30" class="seq-participant-label">Agent</text>
-    </g>
-    <g class="node-group" id="node-seq2-llm">
-      <rect x="440" y="10" width="100" height="34" class="seq-participant-box"/>
-      <text x="490" y="30" class="seq-participant-label">LLM</text>
-    </g>
-    <g class="node-group" id="node-seq2-tools">
-      <rect x="650" y="10" width="100" height="34" class="seq-participant-box"/>
-      <text x="700" y="30" class="seq-participant-label">Tools</text>
-    </g>
-
-    <!-- Lifelines -->
-    <line x1="85"  y1="44" x2="85"  y2="640" class="seq-lifeline"/>
-    <line x1="260" y1="44" x2="260" y2="640" class="seq-lifeline"/>
-    <line x1="490" y1="44" x2="490" y2="640" class="seq-lifeline"/>
-    <line x1="700" y1="44" x2="700" y2="640" class="seq-lifeline"/>
-
-    <!-- Activation bars -->
-    <rect x="254" y="68"  width="12" height="540" class="seq-activation"/>
-    <rect x="484" y="168" width="12" height="55"  class="seq-activation"/>
-    <rect x="694" y="280" width="12" height="58"  class="seq-activation"/>
-    <rect x="484" y="395" width="12" height="55"  class="seq-activation"/>
-    <rect x="694" y="505" width="12" height="55"  class="seq-activation"/>
-
-    <!-- 1. Scheduler -> Agent: task -->
-    <line x1="85" y1="80" x2="254" y2="80" class="seq-arrow" stroke="#22c55e" marker-end="url(#seq2-arrowhead)"/>
-    <text x="170" y="72" class="seq-label" text-anchor="middle">scheduled task</text>
-
-    <!-- 2. Agent self: build system prompt -->
-    <path d="M266,100 L300,100 L300,113 L266,113" class="seq-arrow" stroke="#a855f7" fill="none" marker-end="url(#seq2-arrowhead-purple)"/>
-    <text x="310" y="104" class="seq-label" text-anchor="start">build system prompt</text>
-    <text x="310" y="118" class="seq-label" text-anchor="start" fill="#555">SOUL + AGENTS + USER + TOOLS.md (no schemas)</text>
-
-    <!-- PHASE 1 box -->
-    <rect x="230" y="145" width="290" height="88" rx="3" fill="none" stroke="#22c55e" stroke-width="1" stroke-dasharray="6,3"/>
-    <rect x="230" y="145" width="90" height="16" rx="0" ry="0" fill="#1a1a1a" stroke="#22c55e" stroke-width="1"/>
-    <text x="240" y="156" class="seq-label" fill="#22c55e" font-size="8" font-weight="600">PHASE 1</text>
-    <text x="328" y="156" class="seq-label" fill="#888" font-size="8">gather plan</text>
-
-    <!-- 3. Agent -> LLM: gather plan request -->
-    <line x1="266" y1="180" x2="484" y2="180" class="seq-arrow" stroke="#22c55e" marker-end="url(#seq2-arrowhead)"/>
-    <text x="375" y="170" class="seq-label" text-anchor="middle">task + "output JSON gather plan"</text>
-
-    <!-- 4. LLM -> Agent: JSON gather -->
-    <line x1="484" y1="215" x2="266" y2="215" class="seq-arrow seq-arrow-dashed" marker-end="url(#seq2-arrowhead-dashed)"/>
-    <text x="375" y="205" class="seq-label" text-anchor="middle">{"gather": [{"tool": "...", "params": {...}}]}</text>
-
-    <!-- PHASE 2 box -->
-    <rect x="230" y="258" width="500" height="88" rx="3" fill="none" stroke="#f97316" stroke-width="1" stroke-dasharray="6,3"/>
-    <rect x="230" y="258" width="90" height="16" rx="0" ry="0" fill="#1a1a1a" stroke="#f97316" stroke-width="1"/>
-    <text x="240" y="269" class="seq-label" fill="#f97316" font-size="8" font-weight="600">PHASE 2</text>
-    <text x="328" y="269" class="seq-label" fill="#888" font-size="8">execute gathers</text>
-
-    <!-- 5. Agent -> Tools: execute gathers -->
-    <line x1="266" y1="293" x2="694" y2="293" class="seq-arrow" stroke="#22c55e" marker-end="url(#seq2-arrowhead)"/>
-    <text x="480" y="283" class="seq-label" text-anchor="middle">execute gather tools (Python)</text>
-
-    <!-- 6. Tools -> Agent: results -->
-    <line x1="694" y1="328" x2="266" y2="328" class="seq-arrow seq-arrow-dashed" marker-end="url(#seq2-arrowhead-dashed)"/>
-    <text x="480" y="318" class="seq-label" text-anchor="middle">search results &middot; metrics &middot; context</text>
-
-    <!-- PHASE 3 box -->
-    <rect x="230" y="371" width="290" height="88" rx="3" fill="none" stroke="#22c55e" stroke-width="1" stroke-dasharray="6,3"/>
-    <rect x="230" y="371" width="90" height="16" rx="0" ry="0" fill="#1a1a1a" stroke="#22c55e" stroke-width="1"/>
-    <text x="240" y="382" class="seq-label" fill="#22c55e" font-size="8" font-weight="600">PHASE 3</text>
-    <text x="328" y="382" class="seq-label" fill="#888" font-size="8">action plan</text>
-
-    <!-- 7. Agent -> LLM: compose with context -->
-    <line x1="266" y1="407" x2="484" y2="407" class="seq-arrow" stroke="#22c55e" marker-end="url(#seq2-arrowhead)"/>
-    <text x="375" y="397" class="seq-label" text-anchor="middle">task + gathered context</text>
-
-    <!-- 8. LLM -> Agent: JSON actions -->
-    <line x1="484" y1="442" x2="266" y2="442" class="seq-arrow seq-arrow-dashed" marker-end="url(#seq2-arrowhead-dashed)"/>
-    <text x="375" y="432" class="seq-label" text-anchor="middle">{"actions": [...], "summary": "..."}</text>
-
-    <!-- PHASE 4 box -->
-    <rect x="230" y="484" width="500" height="82" rx="3" fill="none" stroke="#f97316" stroke-width="1" stroke-dasharray="6,3"/>
-    <rect x="230" y="484" width="90" height="16" rx="0" ry="0" fill="#1a1a1a" stroke="#f97316" stroke-width="1"/>
-    <text x="240" y="495" class="seq-label" fill="#f97316" font-size="8" font-weight="600">PHASE 4</text>
-    <text x="328" y="495" class="seq-label" fill="#888" font-size="8">execute actions</text>
-
-    <!-- 9. Agent -> Tools: execute actions -->
-    <line x1="266" y1="518" x2="694" y2="518" class="seq-arrow" stroke="#22c55e" marker-end="url(#seq2-arrowhead)"/>
-    <text x="480" y="508" class="seq-label" text-anchor="middle">post tweets &middot; like &middot; store memory</text>
-
-    <!-- 10. Tools -> Agent: done -->
-    <line x1="694" y1="548" x2="266" y2="548" class="seq-arrow seq-arrow-dashed" marker-end="url(#seq2-arrowhead-dashed)"/>
-    <text x="480" y="538" class="seq-label" text-anchor="middle">execution results</text>
-
-    <!-- 11. Agent -> Scheduler: summary -->
-    <line x1="254" y1="598" x2="85" y2="598" class="seq-arrow seq-arrow-dashed" marker-end="url(#seq2-arrowhead-dashed)"/>
-    <text x="170" y="588" class="seq-label" text-anchor="middle">summary response</text>
-
-    <!-- Cost comparison annotation -->
-    <text x="770" y="155" class="seq-label" fill="#22c55e" font-size="9" font-weight="600">2 LLM calls</text>
-    <text x="770" y="170" class="seq-label" fill="#555" font-size="8">~10K tokens</text>
-    <text x="770" y="185" class="seq-label" fill="#555" font-size="8">0 tool schemas</text>
-    <text x="770" y="208" class="seq-label" fill="#555" font-size="8">vs tool_use loop:</text>
-    <text x="770" y="223" class="seq-label" fill="#ef4444" font-size="8">15 LLM calls</text>
-    <text x="770" y="238" class="seq-label" fill="#ef4444" font-size="8">~300K tokens</text>
-  </svg>
-</div>
-
-<!-- ═══════════════════════════════════════════════════════════
-     PROJECT STRUCTURE
-     ═══════════════════════════════════════════════════════════ -->
-<div class="diagram-section">
-  <h2>Project Structure</h2>
-  <div class="file-tree">
-    <div class="tree-group">
-      <h3 class="clr-blue">core/</h3>
-      <div class="tree-file"><span class="tree-name">agent.py</span><span class="tree-desc">agent loop + reflection + retry + summarization</span></div>
-      <div class="tree-file"><span class="tree-name">alerting.py</span><span class="tree-desc">Discord webhook alerts (errors, cost, crashes)</span></div>
-      <div class="tree-file"><span class="tree-name">api.py</span><span class="tree-desc">FastAPI + trading proxy + agent CRUD + vector queries</span></div>
-      <div class="tree-file"><span class="tree-name">config.py</span><span class="tree-desc">alfred.json loader</span></div>
-      <div class="tree-file"><span class="tree-name">discord.py</span><span class="tree-desc">bot + daemon + proactive posting</span></div>
-      <div class="tree-file"><span class="tree-name">embeddings.py</span><span class="tree-desc">nomic-embed singleton + LRU cache</span></div>
-      <div class="tree-file"><span class="tree-name">llm.py</span><span class="tree-desc">multi-provider client</span></div>
-      <div class="tree-file"><span class="tree-name">logging.py</span><span class="tree-desc">logging config</span></div>
-      <div class="tree-file"><span class="tree-name">memory.py</span><span class="tree-desc">LanceDB + importance scoring + compaction</span></div>
-      <div class="tree-file"><span class="tree-name">metrics_store.py</span><span class="tree-desc">SQLite metrics + cost tracking</span></div>
-      <div class="tree-file"><span class="tree-name">models.py</span><span class="tree-desc">provider/model registry</span></div>
-      <div class="tree-file"><span class="tree-name">process.py</span><span class="tree-desc">shared PID/kill utilities</span></div>
-      <div class="tree-file"><span class="tree-name">scheduler.py</span><span class="tree-desc">cron engine + maintenance jobs</span></div>
-      <div class="tree-file"><span class="tree-name">tool_discovery.py</span><span class="tree-desc">auto-discover agent tools</span></div>
-      <div class="tree-file"><span class="tree-name">tool_meta.py</span><span class="tree-desc">runtime tool creation</span></div>
-      <div class="tree-file"><span class="tree-name">tools.py</span><span class="tree-desc">tool registry + memory_update/link</span></div>
-      <div class="tree-file"><span class="tree-name">workspace.py</span><span class="tree-desc">workspace mgmt</span></div>
+<div class="arch-panel active" id="panel-overview">
+  <div class="arch-section">
+    <div class="arch-section-title">SYSTEM OVERVIEW</div>
+    <div class="arch-section-desc">
+      Alfred is a multi-agent framework where entry points route to an agent framework
+      that orchestrates LLM reasoning, tool execution, and vector memory.
+      Click any node for details.
     </div>
 
-    <div class="tree-group">
-      <h3 class="clr-purple">tools/</h3>
-      <div class="tree-file"><span class="tree-name">web_search.py</span><span class="tree-desc">Brave > xAI > DDG</span></div>
-      <div class="tree-file"><span class="tree-name">http_request.py</span><span class="tree-desc">HTTP + auto-auth</span></div>
-      <div class="tree-file"><span class="tree-name">x_api.py</span><span class="tree-desc">X API OAuth 1.0a</span></div>
-      <div class="tree-file"><span class="tree-name">fetch_url.py</span><span class="tree-desc">web page reader</span></div>
-      <div class="tree-file"><span class="tree-name">file_ops.py</span><span class="tree-desc">workspace files</span></div>
-      <div class="tree-file"><span class="tree-name">calculator.py</span><span class="tree-desc">math evaluator</span></div>
-      <div class="tree-file"><span class="tree-name">datetime_info.py</span><span class="tree-desc">time + date math</span></div>
-    </div>
-
-    <div class="tree-group">
-      <h3 class="clr-green">workspaces/</h3>
-      <div class="tree-file"><span class="tree-name">alfred/</span><span class="tree-desc">general assistant</span></div>
-      <div class="tree-file"><span class="tree-name">btc-trader/</span><span class="tree-desc">market analyst + live bot</span></div>
-      <div class="tree-file"><span class="tree-name">&nbsp; bot/app.py</span><span class="tree-desc">trading bot (BB + RSI)</span></div>
-      <div class="tree-file"><span class="tree-name">&nbsp; bot/run</span><span class="tree-desc">launcher script</span></div>
-      <div class="tree-file"><span class="tree-name">main/</span><span class="tree-desc">default workspace</span></div>
-      <div class="tree-file"><span class="tree-name">xmedia/</span><span class="tree-desc">X/Twitter manager</span></div>
-      <div class="tree-file" style="margin-top:8px;border-top:1px solid #1a1a1a;padding-top:8px">
-        <span class="tree-desc">each workspace contains:</span>
+    <div class="flow-container">
+      <!-- Row 1: Entry Points -->
+      <div class="flow-row-label">ENTRY POINTS</div>
+      <div class="flow-row" style="margin-bottom:8px;">
+        <div class="flow-node fn-entry" onclick="openDrawer('node-cli')">
+          <div class="flow-node-label">CLI</div>
+          <div class="flow-node-sub">alfred ...</div>
+        </div>
+        <div class="flow-node fn-entry" onclick="openDrawer('node-discord-bot')">
+          <div class="flow-node-label">Discord Bot</div>
+          <div class="flow-node-sub">channels</div>
+        </div>
+        <div class="flow-node fn-entry" onclick="openDrawer('node-rest-api')">
+          <div class="flow-node-label">REST API</div>
+          <div class="flow-node-sub">:7700</div>
+        </div>
+        <div class="flow-node fn-entry" onclick="openDrawer('node-dashboard')">
+          <div class="flow-node-label">Dashboard</div>
+          <div class="flow-node-sub">web UI</div>
+        </div>
+        <div class="flow-node fn-entry" onclick="openDrawer('node-scheduler')">
+          <div class="flow-node-label">Scheduler</div>
+          <div class="flow-node-sub">cron + manual</div>
+        </div>
       </div>
-      <div class="tree-file"><span class="tree-name">&nbsp; SOUL.md</span><span class="tree-desc">identity</span></div>
-      <div class="tree-file"><span class="tree-name">&nbsp; AGENTS.md</span><span class="tree-desc">instructions</span></div>
-      <div class="tree-file"><span class="tree-name">&nbsp; USER.md</span><span class="tree-desc">user prefs</span></div>
-      <div class="tree-file"><span class="tree-name">&nbsp; TOOLS.md</span><span class="tree-desc">auto-generated</span></div>
-      <div class="tree-file"><span class="tree-name">&nbsp; memory/</span><span class="tree-desc">agent notes</span></div>
-      <div class="tree-file"><span class="tree-name">&nbsp; tools/</span><span class="tree-desc">custom tools</span></div>
+
+      <div class="flow-arrow flow-arrow-v">&#8595;</div>
+
+      <!-- Row 2: Core Framework -->
+      <div class="flow-row-label">CORE FRAMEWORK</div>
+      <div class="flow-row" style="margin-bottom:8px;">
+        <div class="flow-node fn-core" onclick="openDrawer('node-agent-framework')" style="min-width:180px;">
+          <div class="flow-node-label">Agent Framework</div>
+          <div class="flow-node-sub">core/agent.py</div>
+        </div>
+        <div class="flow-node fn-core" onclick="openDrawer('node-config')">
+          <div class="flow-node-label">Config</div>
+          <div class="flow-node-sub">core/config.py</div>
+        </div>
+        <div class="flow-node fn-core" onclick="openDrawer('node-llm')">
+          <div class="flow-node-label">LLM Client</div>
+          <div class="flow-node-sub">core/llm.py</div>
+        </div>
+        <div class="flow-node fn-core" onclick="openDrawer('node-memory')">
+          <div class="flow-node-label">Memory</div>
+          <div class="flow-node-sub">core/memory.py</div>
+        </div>
+        <div class="flow-node fn-core" onclick="openDrawer('node-alerting')">
+          <div class="flow-node-label">Alerting</div>
+          <div class="flow-node-sub">core/alerting.py</div>
+        </div>
+      </div>
+
+      <div class="flow-arrow flow-arrow-v">&#8595;</div>
+
+      <!-- Row 3: Agents -->
+      <div class="flow-row-label">AGENTS</div>
+      <div class="flow-row" style="margin-bottom:8px;">
+        <div class="flow-node fn-agent" onclick="openDrawer('node-alfred')">
+          <div class="flow-node-label">alfred</div>
+          <div class="flow-node-sub">General Assistant</div>
+        </div>
+        <div class="flow-node fn-agent" onclick="openDrawer('node-xmedia')">
+          <div class="flow-node-label">xmedia</div>
+          <div class="flow-node-sub">X Manager &middot; Structured Mode</div>
+        </div>
+      </div>
+
+      <div class="flow-arrow flow-arrow-v">&#8595;</div>
+
+      <!-- Row 4: Shared Tools -->
+      <div class="flow-row-label">SHARED TOOLS</div>
+      <div class="flow-row" style="margin-bottom:8px;">
+        <div class="flow-node fn-tool" onclick="openDrawer('node-web-search')">
+          <div class="flow-node-label">web_search</div>
+          <div class="flow-node-sub">Brave &gt; xAI &gt; DDG</div>
+        </div>
+        <div class="flow-node fn-tool" onclick="openDrawer('node-http-request')">
+          <div class="flow-node-label">http_request</div>
+          <div class="flow-node-sub">auto-auth</div>
+        </div>
+        <div class="flow-node fn-tool" onclick="openDrawer('node-x-api')">
+          <div class="flow-node-label">x_api</div>
+          <div class="flow-node-sub">OAuth 1.0a</div>
+        </div>
+        <div class="flow-node fn-tool" onclick="openDrawer('node-fetch-file')">
+          <div class="flow-node-label">fetch_url / file_ops</div>
+          <div class="flow-node-sub">web &middot; workspace</div>
+        </div>
+        <div class="flow-node fn-tool" onclick="openDrawer('node-calc-datetime')">
+          <div class="flow-node-label">calc / datetime</div>
+          <div class="flow-node-sub">math &middot; time</div>
+        </div>
+      </div>
+
+      <!-- Row 5: Built-in Tools -->
+      <div class="flow-row-label">BUILT-IN TOOLS</div>
+      <div class="flow-row" style="margin-bottom:8px;">
+        <div class="flow-node fn-tool" onclick="openDrawer('node-memory-search')">
+          <div class="flow-node-label">memory_search</div>
+          <div class="flow-node-sub">hybrid BM25+vector</div>
+        </div>
+        <div class="flow-node fn-tool" onclick="openDrawer('node-memory-store')">
+          <div class="flow-node-label">memory_store</div>
+          <div class="flow-node-sub">dedup + embed</div>
+        </div>
+        <div class="flow-node fn-tool" onclick="openDrawer('node-delegate-to')">
+          <div class="flow-node-label">delegate_to</div>
+          <div class="flow-node-sub">sync inter-agent</div>
+        </div>
+        <div class="flow-node fn-tool" onclick="openDrawer('node-send-message')">
+          <div class="flow-node-label">send_message</div>
+          <div class="flow-node-sub">async inbox</div>
+        </div>
+        <div class="flow-node fn-tool" onclick="openDrawer('node-switch-model')">
+          <div class="flow-node-label">switch_model</div>
+          <div class="flow-node-sub">runtime swap</div>
+        </div>
+      </div>
+
+      <div class="flow-arrow flow-arrow-v">&#8595;</div>
+
+      <!-- Row 6: Data Stores -->
+      <div class="flow-row-label">DATA STORES</div>
+      <div class="flow-row" style="margin-bottom:8px;">
+        <div class="flow-node fn-data" onclick="openDrawer('node-lancedb')">
+          <div class="flow-node-label">LanceDB</div>
+          <div class="flow-node-sub">vectors &middot; hybrid search</div>
+        </div>
+        <div class="flow-node fn-data" onclick="openDrawer('node-sqlite')">
+          <div class="flow-node-label">SQLite</div>
+          <div class="flow-node-sub">metrics &middot; cost &middot; vector queries</div>
+        </div>
+        <div class="flow-node fn-data" onclick="openDrawer('node-sessions')">
+          <div class="flow-node-label">Session Files</div>
+          <div class="flow-node-sub">JSON &middot; full tool chain</div>
+        </div>
+      </div>
+
+      <div class="flow-arrow flow-arrow-v">&#8595;</div>
+
+      <!-- Row 7: External Services -->
+      <div class="flow-row-label">EXTERNAL SERVICES</div>
+      <div class="flow-row">
+        <div class="flow-node fn-external" onclick="openDrawer('node-x-twitter')">
+          <div class="flow-node-label">X / Twitter</div>
+          <div class="flow-node-sub">OAuth 1.0a</div>
+        </div>
+        <div class="flow-node fn-external" onclick="openDrawer('node-brave')">
+          <div class="flow-node-label">Brave Search</div>
+          <div class="flow-node-sub">web results</div>
+        </div>
+        <div class="flow-node fn-external" onclick="openDrawer('node-llm-providers')">
+          <div class="flow-node-label">LLM Providers</div>
+          <div class="flow-node-sub">Anthropic &middot; xAI &middot; OpenAI &middot; Ollama</div>
+        </div>
+      </div>
     </div>
 
-    <div class="tree-group">
-      <h3 class="clr-orange">data/</h3>
-      <div class="tree-file"><span class="tree-name">lancedb/</span><span class="tree-desc">vector database + importance scores</span></div>
-      <div class="tree-file"><span class="tree-name">metrics.db</span><span class="tree-desc">SQLite metrics + cost tracking + vector queries</span></div>
-      <div class="tree-file" style="margin-top:12px"><span class="tree-name" style="color:var(--text-dim)">alfred.json</span><span class="tree-desc">central config (gitignored)</span></div>
+    <div class="legend">
+      <div class="legend-item"><div class="legend-swatch" style="background:rgba(51,65,85,0.3);"></div> Entry Points</div>
+      <div class="legend-item"><div class="legend-swatch" style="background:rgba(59,130,246,0.2);"></div> Core Framework</div>
+      <div class="legend-item"><div class="legend-swatch" style="background:rgba(34,197,94,0.2);"></div> Agents</div>
+      <div class="legend-item"><div class="legend-swatch" style="background:rgba(168,85,247,0.2);"></div> Tools</div>
+      <div class="legend-item"><div class="legend-swatch" style="background:rgba(234,179,8,0.2);"></div> Data Stores</div>
+      <div class="legend-item"><div class="legend-swatch" style="background:rgba(239,68,68,0.2);"></div> External Services</div>
+    </div>
+  </div>
+
+  <div class="arch-section">
+    <div class="arch-section-title">CONFIGURATION</div>
+    <div class="flow-row" style="justify-content:center;">
+      <div class="flow-node fn-neutral" onclick="openDrawer('node-config-file')" style="min-width:300px;">
+        <div class="flow-node-label">alfred.json</div>
+        <div class="flow-node-sub">providers &middot; agents &middot; services &middot; schedules &middot; discord &middot; alerts</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="arch-section">
+    <div class="arch-section-title">DESIGN PATTERNS</div>
+    <div class="file-tree">
+      <div class="tree-group">
+        <h3 class="clr-cyan">Isolation</h3>
+        <div class="tree-file"><span class="tree-desc">Each agent has its own workspace, tools, memory scope, sessions, and LLM config</span></div>
+      </div>
+      <div class="tree-group">
+        <h3 class="clr-cyan">Config-Driven</h3>
+        <div class="tree-file"><span class="tree-desc">Everything from providers to schedules to credentials lives in alfred.json</span></div>
+      </div>
+      <div class="tree-group">
+        <h3 class="clr-cyan">Provider Agnostic</h3>
+        <div class="tree-file"><span class="tree-desc">Swap LLMs per-agent without touching agent code. Anthropic, xAI, OpenAI, Ollama</span></div>
+      </div>
+      <div class="tree-group">
+        <h3 class="clr-cyan">Zero-Config Auth</h3>
+        <div class="tree-file"><span class="tree-desc">Domain-based credential auto-injection. Agents never see raw API keys</span></div>
+      </div>
+      <div class="tree-group">
+        <h3 class="clr-cyan">Memory-First</h3>
+        <div class="tree-file"><span class="tree-desc">Vector memory with importance scoring (0-1), smart relevance gating (distance &lt; 0.4), temporal decay, outcome linking, episodic daily logs, and session snapshots. Agents build long-term memory automatically</span></div>
+      </div>
+      <div class="tree-group">
+        <h3 class="clr-cyan">Self-Learning</h3>
+        <div class="tree-file"><span class="tree-desc">Post-session reflection loop evaluates performance. Confidence scores stored as importance. Decisions linked to outcomes for causal learning</span></div>
+      </div>
+      <div class="tree-group">
+        <h3 class="clr-cyan">Self-Modifying</h3>
+        <div class="tree-file"><span class="tree-desc">Agents create new tools at runtime via meta-tools (tool_create, tool_remove)</span></div>
+      </div>
+      <div class="tree-group">
+        <h3 class="clr-cyan">Structured Execution</h3>
+        <div class="tree-file"><span class="tree-desc">Scheduled runs bypass Anthropic tool_use entirely. LLM outputs JSON plans; Python executes tools directly. 2 LLM calls instead of 15. Zero tool schema overhead. Configurable per-agent via schedule_run_mode</span></div>
+      </div>
+      <div class="tree-group">
+        <h3 class="clr-cyan">Prompt Caching</h3>
+        <div class="tree-file"><span class="tree-desc">System prompt and tool schemas marked with cache_control for Anthropic's prefix caching. First round pays 1.25x, subsequent rounds read at 0.1x. 90% discount on static overhead across multi-round tool loops</span></div>
+      </div>
+      <div class="tree-group">
+        <h3 class="clr-cyan">Cost-Aware</h3>
+        <div class="tree-file"><span class="tree-desc">Per-model USD cost estimates from token counts. Tool results auto-summarized when &gt; 2K chars to save context. Daily cost alerts via Discord</span></div>
+      </div>
+      <div class="tree-group">
+        <h3 class="clr-cyan">Observable</h3>
+        <div class="tree-file"><span class="tree-desc">Every interaction logged with tokens, latency, cost, tool calls. Vector queries tracked with result count and relevance scores</span></div>
+      </div>
+      <div class="tree-group">
+        <h3 class="clr-cyan">Resilient Execution</h3>
+        <div class="tree-file"><span class="tree-desc">Auto-retry on transient errors (timeout, 429, 503) with exponential backoff. LLM fallback. Memory compaction. Metrics never block agents</span></div>
+      </div>
+      <div class="tree-group">
+        <h3 class="clr-cyan">Dashboard-Driven</h3>
+        <div class="tree-file"><span class="tree-desc">Create agents, edit configs, and monitor metrics from the web UI. Optional LLM-generated SOUL.md</span></div>
+      </div>
+      <div class="tree-group">
+        <h3 class="clr-cyan">Proactive Reporting</h3>
+        <div class="tree-file"><span class="tree-desc">Scheduled tasks automatically post results to their agent's Discord channel. No user prompt needed</span></div>
+      </div>
+      <div class="tree-group">
+        <h3 class="clr-cyan">Process Management</h3>
+        <div class="tree-file"><span class="tree-desc">Shared PID utilities (read, alive, kill-and-wait) in core/process.py. Used by daemon, Discord bot, and CLI for bot lifecycle</span></div>
+      </div>
     </div>
   </div>
 </div>
 
 <!-- ═══════════════════════════════════════════════════════════
-     KEY PATTERNS
+     TAB 2: AGENT LIFECYCLE
      ═══════════════════════════════════════════════════════════ -->
-<div class="diagram-section">
-  <h2>Design Patterns</h2>
-  <div class="file-tree">
-    <div class="tree-group">
-      <h3 class="clr-cyan">Isolation</h3>
-      <div class="tree-file"><span class="tree-desc">Each agent has its own workspace, tools, memory scope, sessions, and LLM config</span></div>
+<div class="arch-panel" id="panel-lifecycle">
+  <div class="arch-section">
+    <div class="arch-section-title">AGENT EXECUTION FLOW</div>
+    <div class="arch-section-desc">
+      Every agent interaction follows this pipeline: receive input, recall memories,
+      reason with the LLM, execute tools, reflect, and persist. The tool loop repeats
+      until the LLM produces a final response.
     </div>
-    <div class="tree-group">
-      <h3 class="clr-cyan">Config-Driven</h3>
-      <div class="tree-file"><span class="tree-desc">Everything from providers to schedules to credentials lives in alfred.json</span></div>
+
+    <!-- Participants -->
+    <div class="flow-row" style="margin-bottom:20px;">
+      <div class="flow-node fn-exec" onclick="openDrawer('node-seq-user')" style="min-width:90px;">
+        <div class="flow-node-label">User</div>
+      </div>
+      <div class="flow-node fn-exec" onclick="openDrawer('node-seq-agent')" style="min-width:90px;">
+        <div class="flow-node-label">Agent</div>
+      </div>
+      <div class="flow-node fn-exec" onclick="openDrawer('node-seq-memory')" style="min-width:90px;">
+        <div class="flow-node-label">Memory</div>
+      </div>
+      <div class="flow-node fn-exec" onclick="openDrawer('node-seq-llm')" style="min-width:90px;">
+        <div class="flow-node-label">LLM</div>
+      </div>
+      <div class="flow-node fn-exec" onclick="openDrawer('node-seq-tool')" style="min-width:90px;">
+        <div class="flow-node-label">Tool</div>
+      </div>
     </div>
-    <div class="tree-group">
-      <h3 class="clr-cyan">Provider Agnostic</h3>
-      <div class="tree-file"><span class="tree-desc">Swap LLMs per-agent without touching agent code. Anthropic, xAI, OpenAI, Ollama</span></div>
-    </div>
-    <div class="tree-group">
-      <h3 class="clr-cyan">Zero-Config Auth</h3>
-      <div class="tree-file"><span class="tree-desc">Domain-based credential auto-injection. Agents never see raw API keys</span></div>
-    </div>
-    <div class="tree-group">
-      <h3 class="clr-cyan">Memory-First</h3>
-      <div class="tree-file"><span class="tree-desc">Vector memory with importance scoring (0-1), smart relevance gating (distance &lt; 0.4), temporal decay, outcome linking, episodic daily logs, and session snapshots. Agents build long-term memory automatically</span></div>
-    </div>
-    <div class="tree-group">
-      <h3 class="clr-cyan">Self-Learning</h3>
-      <div class="tree-file"><span class="tree-desc">Post-session reflection loop evaluates performance. Confidence scores stored as importance. Decisions linked to outcomes for causal learning</span></div>
-    </div>
-    <div class="tree-group">
-      <h3 class="clr-cyan">Self-Modifying</h3>
-      <div class="tree-file"><span class="tree-desc">Agents create new tools at runtime via meta-tools (tool_create, tool_remove)</span></div>
-    </div>
-    <div class="tree-group">
-      <h3 class="clr-cyan">Structured Execution</h3>
-      <div class="tree-file"><span class="tree-desc">Scheduled runs bypass Anthropic tool_use entirely. LLM outputs JSON plans; Python executes tools directly. 2 LLM calls instead of 15. Zero tool schema overhead. Configurable per-agent via schedule_run_mode</span></div>
-    </div>
-    <div class="tree-group">
-      <h3 class="clr-cyan">Prompt Caching</h3>
-      <div class="tree-file"><span class="tree-desc">System prompt and tool schemas marked with cache_control for Anthropic's prefix caching. First round pays 1.25x, subsequent rounds read at 0.1x. 90% discount on static overhead across multi-round tool loops</span></div>
-    </div>
-    <div class="tree-group">
-      <h3 class="clr-cyan">Cost-Aware</h3>
-      <div class="tree-file"><span class="tree-desc">Per-model USD cost estimates from token counts. Tool results auto-summarized when &gt; 2K chars to save context. Daily cost alerts via Discord</span></div>
-    </div>
-    <div class="tree-group">
-      <h3 class="clr-cyan">Observable</h3>
-      <div class="tree-file"><span class="tree-desc">Every interaction logged with tokens, latency, cost, tool calls. Vector queries tracked with result count and relevance scores</span></div>
-    </div>
-    <div class="tree-group">
-      <h3 class="clr-cyan">Resilient Execution</h3>
-      <div class="tree-file"><span class="tree-desc">Auto-retry on transient errors (timeout, 429, 503) with exponential backoff. LLM fallback. Memory compaction. Metrics never block agents</span></div>
-    </div>
-    <div class="tree-group">
-      <h3 class="clr-cyan">Dashboard-Driven</h3>
-      <div class="tree-file"><span class="tree-desc">Create agents, edit configs, and monitor metrics from the web UI. Optional LLM-generated SOUL.md</span></div>
-    </div>
-    <div class="tree-group">
-      <h3 class="clr-cyan">Proactive Reporting</h3>
-      <div class="tree-file"><span class="tree-desc">Scheduled tasks automatically post results to their agent's Discord channel. No user prompt needed</span></div>
-    </div>
-    <div class="tree-group">
-      <h3 class="clr-cyan">Autonomous Trading</h3>
-      <div class="tree-file"><span class="tree-desc">Standalone bot process with signal-based execution (BB+RSI), PID lifecycle management, historical seeding, CSV logging, and graceful shutdown with position exit</span></div>
-    </div>
-    <div class="tree-group">
-      <h3 class="clr-cyan">Process Management</h3>
-      <div class="tree-file"><span class="tree-desc">Shared PID utilities (read, alive, kill-and-wait) in core/process.py. Used by daemon, Discord bot, and CLI for bot lifecycle</span></div>
+
+    <!-- Pipeline -->
+    <div class="pipeline">
+      <div class="pipeline-step" onclick="openDrawer('node-seq-user')">
+        <div class="pipeline-num" style="color:var(--cyan);">1</div>
+        <div class="pipeline-info">
+          <div class="pipeline-name">USER TRIGGERS</div>
+          <div class="pipeline-desc">Message via Discord, CLI, REST API, or Scheduler cron</div>
+        </div>
+      </div>
+      <div class="pipeline-arrow">&#8595;</div>
+
+      <div class="pipeline-step" onclick="openDrawer('node-seq-memory')">
+        <div class="pipeline-num" style="color:var(--cyan);">2</div>
+        <div class="pipeline-info">
+          <div class="pipeline-name">AUTO-RECALL MEMORIES</div>
+          <div class="pipeline-desc">Hybrid BM25 + vector search with relevance gating (distance &lt; 0.4)</div>
+        </div>
+      </div>
+      <div class="pipeline-arrow">&#8595;</div>
+
+      <div class="pipeline-step" onclick="openDrawer('node-seq-agent')">
+        <div class="pipeline-num" style="color:var(--cyan);">3</div>
+        <div class="pipeline-info">
+          <div class="pipeline-name">BUILD SYSTEM PROMPT</div>
+          <div class="pipeline-desc">SOUL + AGENTS + USER + TOOLS + today's log + yesterday's log + memories</div>
+        </div>
+      </div>
+      <div class="pipeline-arrow">&#8595;</div>
+
+      <div class="pipeline-step" onclick="openDrawer('node-seq-llm')">
+        <div class="pipeline-num" style="color:var(--cyan);">4</div>
+        <div class="pipeline-info">
+          <div class="pipeline-name">LLM REASONING</div>
+          <div class="pipeline-desc">Prompt + tools sent to LLM with cache_control (90% discount on rounds 2+)</div>
+        </div>
+      </div>
+      <div class="pipeline-arrow">&#8595;</div>
+
+      <!-- Tool Loop -->
+      <div style="border:1px dashed var(--border-light); border-radius:var(--radius); padding:12px; margin-bottom:4px;">
+        <div style="font-size:8px; letter-spacing:1.5px; color:var(--orange); margin-bottom:8px; font-weight:600;">LOOP &mdash; TOOL ROUNDS (max N)</div>
+
+        <div class="pipeline-step" onclick="openDrawer('node-seq-tool')">
+          <div class="pipeline-num" style="color:var(--purple);">5</div>
+          <div class="pipeline-info">
+            <div class="pipeline-name">EXECUTE TOOL</div>
+            <div class="pipeline-desc">Auto-retry on transient errors (timeout, 429, 503). Summarize results &gt; 2K chars</div>
+          </div>
+        </div>
+        <div class="pipeline-arrow">&#8595;</div>
+
+        <div class="pipeline-step" onclick="openDrawer('node-seq-llm')">
+          <div class="pipeline-num" style="color:var(--purple);">6</div>
+          <div class="pipeline-info">
+            <div class="pipeline-name">FEED RESULT TO LLM</div>
+            <div class="pipeline-desc">Tool result (summarized) + history. LLM decides: more tools or final response</div>
+          </div>
+        </div>
+      </div>
+      <div class="pipeline-arrow">&#8595;</div>
+
+      <!-- Reflection -->
+      <div style="border:1px dashed var(--green); border-radius:var(--radius); padding:12px; margin-bottom:4px; opacity:0.85;">
+        <div style="font-size:8px; letter-spacing:1.5px; color:var(--green); margin-bottom:8px; font-weight:600;">OPT &mdash; REFLECTION ENABLED</div>
+        <div class="pipeline-step" onclick="openDrawer('node-seq-agent')">
+          <div class="pipeline-num" style="color:var(--green);">7</div>
+          <div class="pipeline-info">
+            <div class="pipeline-name">SELF-EVALUATE PERFORMANCE</div>
+            <div class="pipeline-desc">Store decision memory with confidence &rarr; importance scoring</div>
+          </div>
+        </div>
+      </div>
+      <div class="pipeline-arrow">&#8595;</div>
+
+      <div class="pipeline-step" onclick="openDrawer('node-seq-agent')">
+        <div class="pipeline-num" style="color:var(--cyan);">8</div>
+        <div class="pipeline-info">
+          <div class="pipeline-name">PERSIST SESSION + DAILY LOG + METRICS</div>
+          <div class="pipeline-desc">JSON session &middot; daily log (memory/YYYY-MM-DD.md) &middot; SQLite metrics &middot; cost tracking</div>
+        </div>
+      </div>
+      <div class="pipeline-arrow">&#8595;</div>
+
+      <div class="pipeline-step" onclick="openDrawer('node-seq-user')">
+        <div class="pipeline-num" style="color:var(--cyan);">9</div>
+        <div class="pipeline-info">
+          <div class="pipeline-name">RESPONSE TO USER</div>
+          <div class="pipeline-desc">Final text response delivered to the originating channel</div>
+        </div>
+      </div>
     </div>
   </div>
 </div>
 
-<!-- ═══════ DETAIL PANEL ═══════ -->
-<div id="detail-backdrop"></div>
-<div id="detail-panel">
-  <button id="detail-close">&times;</button>
-  <div id="detail-category"></div>
-  <h3 id="detail-title"></h3>
-  <p id="detail-desc"></p>
-  <div id="detail-files"></div>
-  <div id="detail-features"></div>
+<!-- ═══════════════════════════════════════════════════════════
+     TAB 3: STRUCTURED MODE
+     ═══════════════════════════════════════════════════════════ -->
+<div class="arch-panel" id="panel-structured">
+  <div class="arch-section">
+    <div class="arch-section-title">STRUCTURED EXECUTION FLOW <span style="font-weight:400;font-size:9px;color:var(--text-dim);margin-left:8px;">SCHEDULED RUNS &middot; NO TOOL_USE</span></div>
+    <div class="arch-section-desc">
+      Scheduled runs bypass the Anthropic tool_use protocol entirely. The LLM outputs JSON plans
+      and Python executes tools directly. 2 LLM calls instead of 15. Zero tool schema overhead.
+    </div>
+
+    <!-- Participants -->
+    <div class="flow-row" style="margin-bottom:20px;">
+      <div class="flow-node fn-tool" onclick="openDrawer('node-seq2-scheduler')" style="min-width:100px;">
+        <div class="flow-node-label">Scheduler</div>
+      </div>
+      <div class="flow-node fn-tool" onclick="openDrawer('node-seq2-agent')" style="min-width:100px;">
+        <div class="flow-node-label">Agent</div>
+      </div>
+      <div class="flow-node fn-tool" onclick="openDrawer('node-seq2-llm')" style="min-width:100px;">
+        <div class="flow-node-label">LLM</div>
+      </div>
+      <div class="flow-node fn-tool" onclick="openDrawer('node-seq2-tools')" style="min-width:100px;">
+        <div class="flow-node-label">Tools</div>
+      </div>
+    </div>
+
+    <!-- 4 Phase Pipeline -->
+    <div class="pipeline">
+      <div class="pipeline-step" onclick="openDrawer('node-seq2-scheduler')">
+        <div class="pipeline-num" style="color:var(--green);">0</div>
+        <div class="pipeline-info">
+          <div class="pipeline-name">SCHEDULER TRIGGERS</div>
+          <div class="pipeline-desc">Cron fires &rarr; injects structured/batch context flags. Build system prompt (no tool schemas)</div>
+        </div>
+      </div>
+      <div class="pipeline-arrow">&#8595;</div>
+
+      <!-- PHASE 1 -->
+      <div style="border:1px dashed var(--green); border-radius:var(--radius); padding:12px; margin-bottom:4px;">
+        <div style="font-size:8px; letter-spacing:1.5px; color:var(--green); margin-bottom:8px; font-weight:600;">PHASE 1 &mdash; GATHER PLAN</div>
+        <div class="pipeline-step" onclick="openDrawer('node-seq2-llm')">
+          <div class="pipeline-num" style="color:var(--green);">1</div>
+          <div class="pipeline-info">
+            <div class="pipeline-name">LLM: GENERATE GATHER PLAN</div>
+            <div class="pipeline-desc">Task + "output JSON gather plan" &rarr; {"gather": [{"tool": "...", "params": {...}}]}</div>
+          </div>
+        </div>
+      </div>
+      <div class="pipeline-arrow">&#8595;</div>
+
+      <!-- PHASE 2 -->
+      <div style="border:1px dashed var(--orange); border-radius:var(--radius); padding:12px; margin-bottom:4px;">
+        <div style="font-size:8px; letter-spacing:1.5px; color:var(--orange); margin-bottom:8px; font-weight:600;">PHASE 2 &mdash; EXECUTE GATHERS</div>
+        <div class="pipeline-step" onclick="openDrawer('node-seq2-tools')">
+          <div class="pipeline-num" style="color:var(--orange);">2</div>
+          <div class="pipeline-info">
+            <div class="pipeline-name">PYTHON: EXECUTE GATHER TOOLS</div>
+            <div class="pipeline-desc">No LLM round-trip. Python iterates JSON array, resolves tools, collects results</div>
+          </div>
+        </div>
+      </div>
+      <div class="pipeline-arrow">&#8595;</div>
+
+      <!-- PHASE 3 -->
+      <div style="border:1px dashed var(--green); border-radius:var(--radius); padding:12px; margin-bottom:4px;">
+        <div style="font-size:8px; letter-spacing:1.5px; color:var(--green); margin-bottom:8px; font-weight:600;">PHASE 3 &mdash; ACTION PLAN</div>
+        <div class="pipeline-step" onclick="openDrawer('node-seq2-llm')">
+          <div class="pipeline-num" style="color:var(--green);">3</div>
+          <div class="pipeline-info">
+            <div class="pipeline-name">LLM: GENERATE ACTION PLAN</div>
+            <div class="pipeline-desc">Task + gathered context &rarr; {"actions": [...], "summary": "..."}</div>
+          </div>
+        </div>
+      </div>
+      <div class="pipeline-arrow">&#8595;</div>
+
+      <!-- PHASE 4 -->
+      <div style="border:1px dashed var(--orange); border-radius:var(--radius); padding:12px; margin-bottom:4px;">
+        <div style="font-size:8px; letter-spacing:1.5px; color:var(--orange); margin-bottom:8px; font-weight:600;">PHASE 4 &mdash; EXECUTE ACTIONS</div>
+        <div class="pipeline-step" onclick="openDrawer('node-seq2-tools')">
+          <div class="pipeline-num" style="color:var(--orange);">4</div>
+          <div class="pipeline-info">
+            <div class="pipeline-name">PYTHON: EXECUTE ACTION TOOLS</div>
+            <div class="pipeline-desc">Post tweets &middot; like &middot; store memory &middot; send messages</div>
+          </div>
+        </div>
+      </div>
+      <div class="pipeline-arrow">&#8595;</div>
+
+      <div class="pipeline-step" onclick="openDrawer('node-seq2-scheduler')">
+        <div class="pipeline-num" style="color:var(--green);">5</div>
+        <div class="pipeline-info">
+          <div class="pipeline-name">SUMMARY RESPONSE</div>
+          <div class="pipeline-desc">Results posted to Discord channel &middot; session snapshot saved &middot; daily log appended</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Cost Comparison -->
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-top:20px;">
+      <div style="padding:16px;background:rgba(34,197,94,0.05);border:1px solid rgba(34,197,94,0.2);border-radius:var(--radius);">
+        <div style="font-size:9px;letter-spacing:1.5px;color:var(--green);margin-bottom:10px;font-weight:600;">STRUCTURED MODE</div>
+        <div style="font-size:11px;color:var(--text-muted);line-height:2;">
+          2 LLM calls<br>~10K tokens<br>0 tool schemas sent
+        </div>
+      </div>
+      <div style="padding:16px;background:rgba(239,68,68,0.05);border:1px solid rgba(239,68,68,0.2);border-radius:var(--radius);">
+        <div style="font-size:9px;letter-spacing:1.5px;color:var(--red);margin-bottom:10px;font-weight:600;">STANDARD TOOL_USE</div>
+        <div style="font-size:11px;color:var(--text-muted);line-height:2;">
+          ~15 LLM calls<br>~300K tokens<br>Full tool schemas per call
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
+     TAB 4: PROJECT STRUCTURE
+     ═══════════════════════════════════════════════════════════ -->
+<div class="arch-panel" id="panel-project">
+  <div class="arch-section">
+    <div class="arch-section-title">FILE TREE</div>
+    <div class="file-tree">
+      <div class="tree-group">
+        <h3 class="clr-blue">core/</h3>
+        <div class="tree-file"><span class="tree-name">agent.py</span><span class="tree-desc">agent loop + reflection + retry + summarization</span></div>
+        <div class="tree-file"><span class="tree-name">alerting.py</span><span class="tree-desc">Discord webhook alerts (errors, cost, crashes)</span></div>
+        <div class="tree-file"><span class="tree-name">api.py</span><span class="tree-desc">FastAPI + agent CRUD + vector queries</span></div>
+        <div class="tree-file"><span class="tree-name">config.py</span><span class="tree-desc">alfred.json loader</span></div>
+        <div class="tree-file"><span class="tree-name">discord.py</span><span class="tree-desc">bot + daemon + proactive posting</span></div>
+        <div class="tree-file"><span class="tree-name">embeddings.py</span><span class="tree-desc">nomic-embed singleton + LRU cache</span></div>
+        <div class="tree-file"><span class="tree-name">llm.py</span><span class="tree-desc">multi-provider client</span></div>
+        <div class="tree-file"><span class="tree-name">logging.py</span><span class="tree-desc">logging config</span></div>
+        <div class="tree-file"><span class="tree-name">memory.py</span><span class="tree-desc">LanceDB + importance scoring + compaction</span></div>
+        <div class="tree-file"><span class="tree-name">metrics_store.py</span><span class="tree-desc">SQLite metrics + cost tracking</span></div>
+        <div class="tree-file"><span class="tree-name">models.py</span><span class="tree-desc">provider/model registry</span></div>
+        <div class="tree-file"><span class="tree-name">process.py</span><span class="tree-desc">shared PID/kill utilities</span></div>
+        <div class="tree-file"><span class="tree-name">scheduler.py</span><span class="tree-desc">cron engine + maintenance jobs</span></div>
+        <div class="tree-file"><span class="tree-name">tool_discovery.py</span><span class="tree-desc">auto-discover agent tools</span></div>
+        <div class="tree-file"><span class="tree-name">tool_meta.py</span><span class="tree-desc">runtime tool creation</span></div>
+        <div class="tree-file"><span class="tree-name">tools.py</span><span class="tree-desc">tool registry + memory_update/link</span></div>
+        <div class="tree-file"><span class="tree-name">workspace.py</span><span class="tree-desc">workspace mgmt</span></div>
+      </div>
+
+      <div class="tree-group">
+        <h3 class="clr-purple">tools/</h3>
+        <div class="tree-file"><span class="tree-name">web_search.py</span><span class="tree-desc">Brave > xAI > DDG</span></div>
+        <div class="tree-file"><span class="tree-name">http_request.py</span><span class="tree-desc">HTTP + auto-auth</span></div>
+        <div class="tree-file"><span class="tree-name">x_api.py</span><span class="tree-desc">X API OAuth 1.0a</span></div>
+        <div class="tree-file"><span class="tree-name">fetch_url.py</span><span class="tree-desc">web page reader</span></div>
+        <div class="tree-file"><span class="tree-name">file_ops.py</span><span class="tree-desc">workspace files</span></div>
+        <div class="tree-file"><span class="tree-name">calculator.py</span><span class="tree-desc">math evaluator</span></div>
+        <div class="tree-file"><span class="tree-name">datetime_info.py</span><span class="tree-desc">time + date math</span></div>
+      </div>
+
+      <div class="tree-group">
+        <h3 class="clr-green">workspaces/</h3>
+        <div class="tree-file"><span class="tree-name">alfred/</span><span class="tree-desc">general assistant</span></div>
+        <div class="tree-file"><span class="tree-name">main/</span><span class="tree-desc">default workspace</span></div>
+        <div class="tree-file"><span class="tree-name">xmedia/</span><span class="tree-desc">X/Twitter manager</span></div>
+        <div class="tree-file" style="margin-top:8px;border-top:1px solid #1a1a1a;padding-top:8px">
+          <span class="tree-desc">each workspace contains:</span>
+        </div>
+        <div class="tree-file"><span class="tree-name">&nbsp; SOUL.md</span><span class="tree-desc">identity</span></div>
+        <div class="tree-file"><span class="tree-name">&nbsp; AGENTS.md</span><span class="tree-desc">instructions</span></div>
+        <div class="tree-file"><span class="tree-name">&nbsp; USER.md</span><span class="tree-desc">user prefs</span></div>
+        <div class="tree-file"><span class="tree-name">&nbsp; TOOLS.md</span><span class="tree-desc">auto-generated</span></div>
+        <div class="tree-file"><span class="tree-name">&nbsp; memory/</span><span class="tree-desc">agent notes</span></div>
+        <div class="tree-file"><span class="tree-name">&nbsp; tools/</span><span class="tree-desc">custom tools</span></div>
+      </div>
+
+      <div class="tree-group">
+        <h3 class="clr-orange">data/</h3>
+        <div class="tree-file"><span class="tree-name">lancedb/</span><span class="tree-desc">vector database + importance scores</span></div>
+        <div class="tree-file"><span class="tree-name">metrics.db</span><span class="tree-desc">SQLite metrics + cost tracking + vector queries</span></div>
+        <div class="tree-file" style="margin-top:12px"><span class="tree-name" style="color:var(--text-dim)">alfred.json</span><span class="tree-desc">central config (gitignored)</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════
+     TAB 5: TECH STACK
+     ═══════════════════════════════════════════════════════════ -->
+<div class="arch-panel" id="panel-stack">
+  <div class="arch-section">
+    <div class="arch-section-title">TECHNOLOGY STACK</div>
+    <div class="stack-grid" id="stack-grid">
+
+      <div class="stack-card" onclick="openDrawer('stack-runtime')">
+        <div class="stack-title">RUNTIME</div>
+        <div class="stack-row"><span class="stack-label">Language</span><span class="stack-value">Python 3.11+</span></div>
+        <div class="stack-row"><span class="stack-label">Async</span><span class="stack-value">asyncio + aiohttp</span></div>
+        <div class="stack-row"><span class="stack-label">Web Framework</span><span class="stack-value">FastAPI</span></div>
+        <div class="stack-row"><span class="stack-label">Discord</span><span class="stack-value">discord.py</span></div>
+      </div>
+
+      <div class="stack-card" onclick="openDrawer('stack-llm')">
+        <div class="stack-title">LLM PROVIDERS</div>
+        <div class="stack-row"><span class="stack-label">Anthropic</span><span class="stack-value">Claude 4.5 Sonnet / Haiku</span></div>
+        <div class="stack-row"><span class="stack-label">xAI</span><span class="stack-value">Grok models + Batch API</span></div>
+        <div class="stack-row"><span class="stack-label">OpenAI</span><span class="stack-value">GPT-4o, o1, o3-mini</span></div>
+        <div class="stack-row"><span class="stack-label">Ollama</span><span class="stack-value">Local models (Llama, etc.)</span></div>
+      </div>
+
+      <div class="stack-card" onclick="openDrawer('stack-data')">
+        <div class="stack-title">DATA LAYER</div>
+        <div class="stack-row"><span class="stack-label">Vector DB</span><span class="stack-value">LanceDB (embedded)</span></div>
+        <div class="stack-row"><span class="stack-label">Embeddings</span><span class="stack-value">nomic-embed-text-v1.5 (768-dim)</span></div>
+        <div class="stack-row"><span class="stack-label">Metrics DB</span><span class="stack-value">SQLite</span></div>
+        <div class="stack-row"><span class="stack-label">Sessions</span><span class="stack-value">JSON files (atomic writes)</span></div>
+      </div>
+
+      <div class="stack-card" onclick="openDrawer('stack-apis')">
+        <div class="stack-title">EXTERNAL APIS</div>
+        <div class="stack-row"><span class="stack-label">Search</span><span class="stack-value">Brave Search API</span></div>
+        <div class="stack-row"><span class="stack-label">Social</span><span class="stack-value">X/Twitter OAuth 1.0a</span></div>
+        <div class="stack-row"><span class="stack-label">Alerts</span><span class="stack-value">Discord Webhooks</span></div>
+      </div>
+
+      <div class="stack-card" onclick="openDrawer('stack-infra')">
+        <div class="stack-title">INFRASTRUCTURE</div>
+        <div class="stack-row"><span class="stack-label">Config</span><span class="stack-value">alfred.json (central, gitignored)</span></div>
+        <div class="stack-row"><span class="stack-label">Scheduler</span><span class="stack-value">Built-in cron engine</span></div>
+        <div class="stack-row"><span class="stack-label">Process Mgmt</span><span class="stack-value">PID-based daemon control</span></div>
+        <div class="stack-row"><span class="stack-label">Dashboard</span><span class="stack-value">Static HTML + vanilla JS</span></div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- ═══════ DRAWER ═══════ -->
+<div class="drawer-backdrop" id="drawer-backdrop" onclick="closeDrawer()"></div>
+<div class="drawer" id="drawer">
+  <div class="drawer-header">
+    <div class="drawer-title" id="drawer-title"></div>
+    <button class="drawer-close" onclick="closeDrawer()">&times;</button>
+  </div>
+  <div class="drawer-body" id="drawer-body"></div>
 </div>
 
 <script>
+// ═══════ BADGE COLORS ═══════
+const BADGE_COLORS = {
+  'Entry Point': 'blue',
+  'Core Framework': 'blue',
+  'Agent': 'green',
+  'Shared Tool': 'purple',
+  'Built-in Tool': 'purple',
+  'Data Store': 'yellow',
+  'External Service': 'red',
+  'Execution Flow': 'cyan',
+  'Structured Execution': 'purple',
+  'Configuration': 'orange',
+  'Runtime': 'orange',
+  'LLM Providers': 'blue',
+  'Data Layer': 'yellow',
+  'External APIs': 'red',
+  'Infrastructure': 'cyan'
+};
+
+// ═══════ NODE DATA ═══════
 const NODE_DATA = {
   'node-cli': {
     title: 'CLI',
     category: 'Entry Point',
-    categoryColor: '#334155',
     desc: 'Command-line interface for direct agent interaction. Supports one-shot queries and interactive sessions. Used for testing, debugging, and local automation without Discord.',
     files: ['cli.py'],
     features: ['Interactive REPL mode', 'One-shot queries via arguments', 'Session persistence across runs', 'Agent selection via --agent flag']
@@ -1097,7 +1041,6 @@ const NODE_DATA = {
   'node-discord-bot': {
     title: 'Discord Bot',
     category: 'Entry Point',
-    categoryColor: '#334155',
     desc: 'Discord gateway that routes messages to agents based on channel mappings in alfred.json. Supports mentions, DMs, and channel-specific agent assignment.',
     files: ['core/discord.py'],
     features: ['Channel-to-agent routing', 'Mention-based activation', 'Typing indicators during processing', 'Message chunking for long responses', 'Proactive result posting from scheduled tasks']
@@ -1105,23 +1048,20 @@ const NODE_DATA = {
   'node-rest-api': {
     title: 'REST API',
     category: 'Entry Point',
-    categoryColor: '#334155',
-    desc: 'FastAPI server on port 7700. Provides endpoints for chat, agent management, metrics with cost tracking, vector query logs, schedules, trading status, and configuration.',
+    desc: 'FastAPI server on port 7700. Provides endpoints for chat, agent management, metrics with cost tracking, vector query logs, schedules, and configuration.',
     files: ['core/api.py'],
-    features: ['POST /v1/chat — send messages', 'POST /v1/agents — create/delete agents', 'PATCH /v1/agents/{name}/config — update provider/model/run mode', 'GET /v1/agents/{name}/files — list viewable workspace files', 'GET /v1/agents/{name}/files/{path} — read workspace files (SOUL.md, daily logs, snapshots)', 'GET /v1/metrics — query metrics with cost data', 'GET /v1/vector-queries — memory search logs', 'POST /v1/schedules/{id}/run — manual trigger', 'GET /v1/trading/status — Alpaca proxy + round-trip merge', 'POST /v1/admin/reload — daemon hot-reload', 'SSE streaming support', 'Alpaca API caching (10s TTL)']
+    features: ['POST /v1/chat \u2014 send messages', 'POST /v1/agents \u2014 create/delete agents', 'PATCH /v1/agents/{name}/config \u2014 update provider/model/run mode', 'GET /v1/agents/{name}/files \u2014 list viewable workspace files', 'GET /v1/agents/{name}/files/{path} \u2014 read workspace files', 'GET /v1/metrics \u2014 query metrics with cost data', 'GET /v1/vector-queries \u2014 memory search logs', 'POST /v1/schedules/{id}/run \u2014 manual trigger', 'POST /v1/admin/reload \u2014 daemon hot-reload', 'SSE streaming support']
   },
   'node-dashboard': {
     title: 'Dashboard',
     category: 'Entry Point',
-    categoryColor: '#334155',
-    desc: 'Web-based management UI served by the API. Create and delete agents, view metrics with cost tracking, monitor vector queries, manage schedules, monitor live BTC trading, view workspace files, and browse architecture.',
+    desc: 'Web-based management UI served by the API. Create and delete agents, view metrics with cost tracking, monitor vector queries, manage schedules, view workspace files, and browse architecture.',
     files: ['static/dashboard.html', 'static/js/dashboard.js', 'static/css/dashboard.css'],
-    features: ['Agent creation with LLM-generated SOUL.md', 'Agent deletion with type-to-confirm safety', 'Config modal with provider, model, and schedule run mode selector', 'File viewer: daily logs, SOUL.md, and session snapshots per agent', 'Per-agent cost tracking and estimation', 'Per-model cost breakdown', 'Vector query log with relevance scores', 'Schedule management with manual run button', 'BTC price chart with candlesticks', 'Real-time position and account info', 'Recent trades table (merged round-trips)', 'Daemon hot-reload from UI']
+    features: ['Agent creation with LLM-generated SOUL.md', 'Agent deletion with type-to-confirm safety', 'Config modal with provider, model, and schedule run mode selector', 'File viewer: daily logs, SOUL.md, and session snapshots per agent', 'Per-agent cost tracking and estimation', 'Per-model cost breakdown', 'Vector query log with relevance scores', 'Schedule management with manual run button', 'Daemon hot-reload from UI']
   },
   'node-scheduler': {
     title: 'Scheduler',
     category: 'Entry Point',
-    categoryColor: '#334155',
     desc: 'Built-in cron engine that runs tasks on configurable schedules. Results are automatically posted to the agent\'s Discord channel. Also runs weekly maintenance jobs (memory compaction).',
     files: ['core/scheduler.py'],
     features: ['Cron expression scheduling', 'Run mode dispatch: tool_use, structured, or batch (per-agent config)', 'Manual trigger via API/dashboard', 'Retry logic (0-3 attempts)', 'Catchup for missed runs', 'Result history tracking', 'Per-schedule enable/disable', 'Weekly memory compaction maintenance', 'Configurable maintenance cron in alfred.json']
@@ -1129,23 +1069,20 @@ const NODE_DATA = {
   'node-agent-framework': {
     title: 'Agent Framework',
     category: 'Core Framework',
-    categoryColor: '#3b82f6',
     desc: 'Central orchestration engine. Manages the full agent loop: receives input, recalls memories with smart relevance gating, builds system prompt, calls LLM, dispatches tool calls with auto-retry and result summarization, runs optional reflection, and persists sessions with cost tracking.',
     files: ['core/agent.py'],
-    features: ['Multi-turn tool loop with configurable max rounds', 'Structured execution mode: 2-phase JSON planning (no tool_use, no schemas)', 'Batch mode: structured + xAI Batch API at 50% cost discount with auto-fallback', 'Prompt caching: cache_control on system prompt + tool schemas (90% discount on rounds 2+)', 'Smart auto-recall with relevance gating (distance < 0.4)', 'Tool result summarization for outputs > 2K chars', 'Auto-retry on transient errors (timeout, 429, 503) with backoff', 'Post-session reflection loop (opt-in) with confidence scoring', 'System prompt assembly from SOUL + AGENTS + USER + TOOLS + today\'s log + yesterday\'s log + memories', 'Full tool chain persistence (prevents tool-call hallucination)', 'Turn-based session trimming with pre-compaction flush to vector memory + daily log', 'Daily logs: auto-append structured run entries to memory/YYYY-MM-DD.md (zero LLM cost, today + yesterday injected into system prompt with 6000 char budget)', 'Session snapshots: save last 15 messages as markdown on reset and after scheduled runs (memory/sessions/)', 'Mid-run memory persist: Context Window Guard summaries stored in vector memory + daily log (write-ahead pattern)', 'Per-interaction cost estimation and alerting hooks']
+    features: ['Multi-turn tool loop with configurable max rounds', 'Structured execution mode: 2-phase JSON planning (no tool_use, no schemas)', 'Batch mode: structured + xAI Batch API at 50% cost discount with auto-fallback', 'Prompt caching: cache_control on system prompt + tool schemas (90% discount on rounds 2+)', 'Smart auto-recall with relevance gating (distance < 0.4)', 'Tool result summarization for outputs > 2K chars', 'Auto-retry on transient errors (timeout, 429, 503) with backoff', 'Post-session reflection loop (opt-in) with confidence scoring', 'System prompt assembly from SOUL + AGENTS + USER + TOOLS + today\'s log + yesterday\'s log + memories', 'Full tool chain persistence (prevents tool-call hallucination)', 'Turn-based session trimming with pre-compaction flush to vector memory + daily log', 'Daily logs: auto-append structured run entries to memory/YYYY-MM-DD.md', 'Session snapshots: save last 15 messages as markdown on reset and after scheduled runs', 'Mid-run memory persist: Context Window Guard summaries stored in vector memory + daily log', 'Per-interaction cost estimation and alerting hooks']
   },
   'node-config': {
     title: 'Config',
     category: 'Core Framework',
-    categoryColor: '#3b82f6',
-    desc: 'Loads and manages alfred.json — the central configuration file. Provides typed access to providers, agents, services, credentials, schedules, and Discord channel mappings.',
+    desc: 'Loads and manages alfred.json \u2014 the central configuration file. Provides typed access to providers, agents, services, credentials, schedules, and Discord channel mappings.',
     files: ['core/config.py'],
     features: ['Hot-reload on daemon SIGHUP', 'Credential auto-injection by domain', 'Provider config with per-agent overrides', 'Schedule definitions with cron expressions']
   },
   'node-llm': {
     title: 'LLM Client',
     category: 'Core Framework',
-    categoryColor: '#3b82f6',
     desc: 'Multi-provider LLM client supporting Anthropic (native), OpenAI, xAI, and Ollama (OpenAI-compatible). Handles tool formatting, streaming, token counting, provider fallback, and xAI Batch API.',
     files: ['core/llm.py'],
     features: ['Anthropic native API with system prompt caching', 'OpenAI-compatible wrapper for xAI/Ollama', 'xAI Batch API client (50% cost discount, async with polling)', 'Automatic tool schema conversion between formats', 'Primary/secondary provider fallback', 'Token usage tracking per request']
@@ -1153,47 +1090,34 @@ const NODE_DATA = {
   'node-memory': {
     title: 'Memory',
     category: 'Core Framework',
-    categoryColor: '#3b82f6',
     desc: 'LanceDB-backed vector memory with hybrid search, importance scoring, outcome linking, and automatic compaction. Uses cached local embeddings. Every search is logged for observability.',
     files: ['core/memory.py', 'core/embeddings.py'],
-    features: ['Hybrid search: BM25 full-text + vector similarity', 'Importance scoring (0.0-1.0) with search boost', 'Outcome linking between decisions and results', 'Structured metadata filters (symbol, outcome, etc.)', 'Embedding LRU cache (256 entries, SHA-256 keyed)', 'Vector query logging to SQLite for observability', 'Temporal decay weighting (30-day half-life)', '95% similarity dedup within 24h window', 'Auto-compaction: prune old low-importance records', 'Cross-agent memory via shared flag', 'Episodic daily logs (memory/YYYY-MM-DD.md, auto-written, today + yesterday injected into system prompt)', 'Compaction summaries written to both vector memory and daily log markdown', 'Session snapshots (memory/sessions/, last 15 messages, auto-pruned to 20 per agent)', 'Viewable from dashboard via file viewer API']
+    features: ['Hybrid search: BM25 full-text + vector similarity', 'Importance scoring (0.0-1.0) with search boost', 'Outcome linking between decisions and results', 'Structured metadata filters (symbol, outcome, etc.)', 'Embedding LRU cache (256 entries, SHA-256 keyed)', 'Vector query logging to SQLite for observability', 'Temporal decay weighting (30-day half-life)', '95% similarity dedup within 24h window', 'Auto-compaction: prune old low-importance records', 'Cross-agent memory via shared flag', 'Episodic daily logs (memory/YYYY-MM-DD.md)', 'Session snapshots (memory/sessions/, last 15 messages)', 'Viewable from dashboard via file viewer API']
+  },
+  'node-alerting': {
+    title: 'Alerting',
+    category: 'Core Framework',
+    desc: 'Discord webhook-based alerting for operational awareness. Fires alerts when error rates spike, daily costs exceed thresholds, or agents crash. Configurable rules and cooldowns in alfred.json.',
+    files: ['core/alerting.py'],
+    features: ['Error rate alerts (configurable threshold + time window)', 'Daily cost threshold alerts', 'Bot crash alerts (immediate, no cooldown)', 'Per-alert-type cooldown to prevent spam', 'Discord embed formatting with color coding', 'Configurable rules in alfred.json alerts section']
   },
   'node-alfred': {
     title: 'alfred',
     category: 'Agent',
-    categoryColor: '#22c55e',
     desc: 'General-purpose assistant agent. Handles everyday questions, coding help, research, and system administration tasks.',
     files: ['workspaces/alfred/SOUL.md'],
     features: ['General knowledge and reasoning', 'Web search and research', 'File operations in workspace', 'Delegation to specialized agents']
   },
-  'node-btc-trader': {
-    title: 'btc-trader',
-    category: 'Agent',
-    categoryColor: '#22c55e',
-    desc: 'Self-learning market analyst agent focused on BTC/USD. Features post-session reflection, importance-weighted memory, and outcome linking. Owns the autonomous trading bot process and manages paper trading via Alpaca.',
-    files: ['workspaces/btc-trader/SOUL.md'],
-    features: ['Market data analysis and research', 'Post-session reflection with confidence scoring', 'Decision-to-outcome memory linking', 'Importance-weighted memory recall', 'Alpaca paper trading integration', 'Scheduled market reports', 'Owns autonomous BTC trading bot']
-  },
   'node-xmedia': {
     title: 'xmedia',
     category: 'Agent',
-    categoryColor: '#22c55e',
     desc: 'X/Twitter content manager. Uses structured execution for scheduled runs \u2014 2 LLM calls instead of 15, zero tool schemas. Drafts posts, manages engagement, and monitors the X API.',
     files: ['workspaces/xmedia/SOUL.md'],
     features: ['Structured mode: gather\u2192compose\u2192execute pipeline', '12-tool allowlist (down from 31)', 'Tweet composition and posting', 'OAuth 1.0a authentication', 'Content scheduling', 'Engagement monitoring and replies']
   },
-  'node-trading-bot': {
-    title: 'BTC Trading Bot',
-    category: 'Autonomous Process',
-    categoryColor: '#06b6d4',
-    desc: 'Standalone Python process that trades BTC/USD on Alpaca paper. Streams real-time 1-minute bars via websocket, computes Bollinger Bands + RSI signals, and executes limit orders. Managed by the daemon via PID file. Writes bars to daily CSV and trades to trades_history.csv.',
-    files: ['workspaces/btc-trader/bot/app.py', 'workspaces/btc-trader/bot/run'],
-    features: ['Bollinger Band (20,2) + RSI(14) strategy', 'Real-time Alpaca websocket streaming', 'ATR-based stop losses (2x ATR)', '2% risk per trade position sizing', 'Historical bar seeding (200 bars on startup)', 'Historical trade seeding from broker', 'Spike filter with cooldown logic', 'Graceful shutdown with position exit', 'RotatingFileHandler logging (10MB, 3 backups)', 'CSV bar export per day + trade history']
-  },
   'node-web-search': {
     title: 'web_search',
     category: 'Shared Tool',
-    categoryColor: '#a855f7',
     desc: 'Web search with cascading providers: Brave Search API (primary), xAI Grok search (fallback), DuckDuckGo (last resort). Returns structured results with titles, URLs, and snippets.',
     files: ['tools/web_search.py'],
     features: ['3-tier provider cascade', 'Brave Search API integration', 'xAI Grok search fallback', 'DuckDuckGo HTML scraping fallback']
@@ -1201,7 +1125,6 @@ const NODE_DATA = {
   'node-http-request': {
     title: 'http_request',
     category: 'Shared Tool',
-    categoryColor: '#a855f7',
     desc: 'General-purpose HTTP client with automatic credential injection. Matches request domains against configured service credentials to inject auth headers transparently.',
     files: ['tools/http_request.py'],
     features: ['GET/POST/PUT/DELETE methods', 'Domain-based auto-auth injection', 'JSON and form body support', 'Response truncation for large payloads']
@@ -1209,7 +1132,6 @@ const NODE_DATA = {
   'node-x-api': {
     title: 'x_api',
     category: 'Shared Tool',
-    categoryColor: '#a855f7',
     desc: 'X/Twitter API wrapper using OAuth 1.0a. Handles tweet posting, user lookups, timeline fetching, and engagement actions.',
     files: ['tools/x_api.py'],
     features: ['Tweet posting and deletion', 'User profile lookups', 'Timeline and mention fetching', 'OAuth 1.0a signature generation']
@@ -1217,7 +1139,6 @@ const NODE_DATA = {
   'node-fetch-file': {
     title: 'fetch_url / file_ops',
     category: 'Shared Tool',
-    categoryColor: '#a855f7',
     desc: 'URL content fetcher and workspace file operations. fetch_url extracts readable text from web pages. file_ops provides read/write/list within the agent\'s workspace directory.',
     files: ['tools/fetch_url.py', 'tools/file_ops.py'],
     features: ['HTML-to-text extraction', 'Workspace-scoped file read/write', 'Directory listing', 'Content length limits']
@@ -1225,7 +1146,6 @@ const NODE_DATA = {
   'node-calc-datetime': {
     title: 'calculator / datetime',
     category: 'Shared Tool',
-    categoryColor: '#a855f7',
     desc: 'Math expression evaluator and date/time utility. Calculator safely evaluates mathematical expressions. Datetime provides current time, timezone conversion, and date arithmetic.',
     files: ['tools/calculator.py', 'tools/datetime_info.py'],
     features: ['Safe math expression evaluation', 'Current date/time with timezone', 'Date arithmetic and formatting', 'Timezone conversion']
@@ -1233,7 +1153,6 @@ const NODE_DATA = {
   'node-memory-search': {
     title: 'memory_search',
     category: 'Built-in Tool',
-    categoryColor: '#a855f7',
     desc: 'Searches the agent\'s vector memory using hybrid BM25 + vector similarity with importance boosting. Supports structured metadata filters and returns record IDs for linking.',
     files: ['core/tools.py'],
     features: ['Hybrid search (BM25 + vector)', 'Importance-boosted relevance scoring', 'Structured metadata filters (symbol, outcome, etc.)', 'Returns record IDs and importance scores', 'Per-agent scoped results', 'Global cross-agent variant', 'Temporal decay weighting', 'Every query logged for observability']
@@ -1241,7 +1160,6 @@ const NODE_DATA = {
   'node-memory-store': {
     title: 'memory_store',
     category: 'Built-in Tool',
-    categoryColor: '#a855f7',
     desc: 'Stores new memories in the agent\'s vector database. Automatically deduplicates against recent similar entries. Supports optional shared flag for cross-agent visibility.',
     files: ['core/tools.py'],
     features: ['Vector embedding and storage', '95% similarity dedup (24h window)', 'Optional shared flag for cross-agent access', 'Metadata tagging', 'Default importance of 0.5']
@@ -1249,7 +1167,6 @@ const NODE_DATA = {
   'node-memory-update': {
     title: 'memory_update',
     category: 'Built-in Tool',
-    categoryColor: '#a855f7',
     desc: 'Updates an existing memory record\'s importance, tags, or content. Used by the reflection loop to adjust importance based on outcomes. Core to the self-learning system.',
     files: ['core/tools.py'],
     features: ['Update importance score (0.0-1.0)', 'Update tags for categorization', 'Update content text', 'Preserves record ID and other metadata']
@@ -1257,15 +1174,13 @@ const NODE_DATA = {
   'node-memory-link': {
     title: 'memory_link',
     category: 'Built-in Tool',
-    categoryColor: '#a855f7',
-    desc: 'Links two memory records together for outcome tracking. Connects a decision memory to its trade outcome, enabling the agent to learn which strategies worked.',
+    desc: 'Links two memory records together for outcome tracking. Connects a decision memory to its outcome, enabling the agent to learn which strategies worked.',
     files: ['core/tools.py'],
-    features: ['Bidirectional linking via linked_ids field', 'Source and target can be different memory types', 'Enables causal learning from decision → outcome chains']
+    features: ['Bidirectional linking via linked_ids field', 'Source and target can be different memory types', 'Enables causal learning from decision \u2192 outcome chains']
   },
   'node-delegate-to': {
     title: 'delegate_to',
     category: 'Built-in Tool',
-    categoryColor: '#a855f7',
     desc: 'Synchronous inter-agent delegation. Sends a prompt to another agent and waits for the response. Used for specialized task routing between agents.',
     files: ['core/agent.py'],
     features: ['Synchronous call-and-wait', 'Any agent can delegate to any other', 'Response returned inline', 'Separate session context per delegation']
@@ -1273,7 +1188,6 @@ const NODE_DATA = {
   'node-send-message': {
     title: 'send_message',
     category: 'Built-in Tool',
-    categoryColor: '#a855f7',
     desc: 'Asynchronous inter-agent messaging. Drops a message into another agent\'s inbox for later processing. Paired with check_inbox for reading received messages.',
     files: ['core/agent.py'],
     features: ['Async fire-and-forget delivery', 'Per-agent inbox queue', 'check_inbox companion tool', 'No blocking on recipient']
@@ -1281,23 +1195,13 @@ const NODE_DATA = {
   'node-switch-model': {
     title: 'switch_model',
     category: 'Built-in Tool',
-    categoryColor: '#a855f7',
     desc: 'Runtime model swap. Allows an agent to change its own LLM provider and model mid-conversation. Useful for escalating complex tasks to more capable models.',
     files: ['core/agent.py'],
     features: ['Mid-conversation model change', 'Provider + model selection', 'Takes effect on next LLM call', 'Agent self-initiated']
   },
-  'node-alerting': {
-    title: 'Alerting',
-    category: 'Core Framework',
-    categoryColor: '#3b82f6',
-    desc: 'Discord webhook-based alerting for operational awareness. Fires alerts when error rates spike, daily costs exceed thresholds, or agents crash. Configurable rules and cooldowns in alfred.json.',
-    files: ['core/alerting.py'],
-    features: ['Error rate alerts (configurable threshold + time window)', 'Daily cost threshold alerts', 'Bot crash alerts (immediate, no cooldown)', 'Per-alert-type cooldown to prevent spam', 'Discord embed formatting with color coding', 'Configurable rules in alfred.json alerts section']
-  },
   'node-lancedb': {
     title: 'LanceDB',
     category: 'Data Store',
-    categoryColor: '#f59e0b',
     desc: 'Embedded vector database for agent memories. Stores embeddings from nomic-embed-text-v1.5 with full-text search index. Supports hybrid BM25 + vector similarity queries.',
     files: ['data/lancedb/', 'core/memory.py'],
     features: ['Embedded (no separate server)', '768-dim vector embeddings', 'BM25 full-text search index', 'Per-agent table partitioning', 'Automatic compaction']
@@ -1305,7 +1209,6 @@ const NODE_DATA = {
   'node-sqlite': {
     title: 'SQLite',
     category: 'Data Store',
-    categoryColor: '#f59e0b',
     desc: 'Metrics database tracking every agent interaction including estimated costs. Also stores vector query logs for memory observability. Powers dashboard cost and performance views.',
     files: ['data/metrics.db', 'core/metrics_store.py'],
     features: ['Per-interaction token tracking (input/output)', 'Estimated cost per interaction (per-model pricing)', 'Vector query logging (query text, result count, avg distance)', 'Latency measurement', 'Tool call logging', 'Error rate tracking', 'Cost aggregation by agent, model, and period', 'Dashboard chart queries']
@@ -1313,23 +1216,13 @@ const NODE_DATA = {
   'node-sessions': {
     title: 'Session Files',
     category: 'Data Store',
-    categoryColor: '#f59e0b',
-    desc: 'JSON files storing full conversation history including tool_use and tool_result blocks. The LLM sees its own prior tool calls on every turn, preventing tool-call hallucination. Atomic writes prevent corruption. Session snapshots saved as markdown on reset and after scheduled runs.',
+    desc: 'JSON files storing full conversation history including tool_use and tool_result blocks. The LLM sees its own prior tool calls on every turn, preventing tool-call hallucination. Atomic writes prevent corruption.',
     files: ['workspaces/*/session*.json', 'workspaces/*/memory/sessions/*.md'],
     features: ['Full tool chain persistence (tool_use + tool_result blocks)', 'Turn-based trimming (groups tool messages with their parent turn)', 'JSON format with atomic writes', 'Per-channel/CLI/API sessions', 'Token budget enforcement', 'Pre-compaction flush to vector memory + daily log markdown', 'Session snapshots: last 15 messages saved as markdown on reset/schedule completion']
-  },
-  'node-alpaca': {
-    title: 'Alpaca API',
-    category: 'External Service',
-    categoryColor: '#ef4444',
-    desc: 'Paper trading API used by both the trading bot (direct SDK + websocket) and the dashboard (REST proxy via api.py). Bot streams real-time bars via CryptoDataStream websocket and places orders via TradingClient. Dashboard proxies account, positions, and bars with 10s caching.',
-    files: ['workspaces/btc-trader/bot/app.py', 'core/api.py', 'tools/http_request.py'],
-    features: ['Paper trading (no real money)', 'CryptoDataStream websocket (1-min bars)', 'TradingClient for orders and positions', 'CryptoHistoricalDataClient for bar seeding', 'REST proxy in api.py with 10s TTL cache', 'Round-trip trade merging in API response']
   },
   'node-x-twitter': {
     title: 'X / Twitter API',
     category: 'External Service',
-    categoryColor: '#ef4444',
     desc: 'X platform API accessed via OAuth 1.0a. Used by the xmedia agent for posting tweets, monitoring engagement, and managing the account.',
     files: ['tools/x_api.py'],
     features: ['OAuth 1.0a authentication', 'Tweet CRUD operations', 'User and timeline queries', 'Rate limit awareness']
@@ -1337,7 +1230,6 @@ const NODE_DATA = {
   'node-brave': {
     title: 'Brave Search',
     category: 'External Service',
-    categoryColor: '#ef4444',
     desc: 'Primary web search provider. Returns structured results with titles, URLs, and snippets. Falls back to xAI Grok search or DuckDuckGo if unavailable.',
     files: ['tools/web_search.py'],
     features: ['API key authentication', 'Structured result format', 'Primary in 3-tier search cascade']
@@ -1345,156 +1237,189 @@ const NODE_DATA = {
   'node-llm-providers': {
     title: 'LLM Providers',
     category: 'External Service',
-    categoryColor: '#ef4444',
     desc: 'AI model providers that power agent reasoning. Anthropic (native API), OpenAI, xAI (Grok), and Ollama (local). Each agent can use a different provider.',
     files: ['core/llm.py', 'core/models.py'],
     features: ['Anthropic: Claude 4.5 Sonnet/Haiku, system prompt caching', 'OpenAI: GPT-4o, o1, o3-mini', 'xAI: Grok models', 'Ollama: local models (Llama, etc.)', 'Per-agent provider assignment']
   },
-  // ── Sequence Diagram Participants ──
+  // Sequence Diagram Participants
   'node-seq-user': {
-    title: 'User',
+    title: 'User (Trigger)',
     category: 'Execution Flow',
-    categoryColor: '#06b6d4',
-    desc: 'The trigger that initiates an agent run. Can be a human typing in Discord or CLI, an API call from the dashboard, or the scheduler firing a cron task. The user sends a message and receives the final response after the full tool loop completes.',
+    desc: 'The trigger that initiates an agent run. Can be a human typing in Discord or CLI, an API call from the dashboard, or the scheduler firing a cron task.',
     files: ['core/discord.py', 'core/api.py', 'core/scheduler.py', '__main__.py'],
     features: ['Discord message (channel-routed to agent)', 'CLI interactive REPL or one-shot query', 'REST API POST /v1/chat', 'Scheduled cron trigger with task prompt', 'Dashboard chat interface']
   },
   'node-seq-agent': {
-    title: 'Agent',
+    title: 'Agent (Orchestrator)',
     category: 'Execution Flow',
-    categoryColor: '#06b6d4',
     desc: 'The orchestrator for a single run. Recalls memories, assembles system prompt with daily log, dispatches tool calls, runs reflection, persists session + daily log + session snapshot, and tracks cost.',
     files: ['core/agent.py'],
-    features: ['Structured execution: 2-phase JSON output for scheduled runs (no tool_use overhead)', 'Smart auto-recall with relevance gating (distance < 0.4)', 'Importance-boosted memory search results', 'Tool result summarization (compress > 2K char outputs)', 'Auto-retry on transient errors with exponential backoff', 'Post-session reflection loop (evaluates own performance)', 'System prompt assembly from SOUL + AGENTS + USER + TOOLS + daily log + memories', 'Session persistence with full tool chain', 'Daily log auto-append after each run (zero LLM cost)', 'Session snapshots on reset and scheduled runs', 'Mid-run compaction summaries persisted to vector memory', 'Per-interaction cost estimation', 'Error alerting via Discord webhooks']
+    features: ['Structured execution: 2-phase JSON output for scheduled runs', 'Smart auto-recall with relevance gating (distance < 0.4)', 'Tool result summarization (compress > 2K char outputs)', 'Auto-retry on transient errors with exponential backoff', 'Post-session reflection loop', 'System prompt: SOUL + AGENTS + USER + TOOLS + daily log + memories', 'Session persistence with full tool chain', 'Daily log auto-append after each run', 'Session snapshots on reset and scheduled runs', 'Per-interaction cost estimation']
   },
   'node-seq-memory': {
-    title: 'Memory',
+    title: 'Memory (Vector)',
     category: 'Execution Flow',
-    categoryColor: '#06b6d4',
-    desc: 'Vector memory backed by LanceDB with hybrid search, importance scoring, and LRU-cached embeddings. Searches are logged for observability. Supports structured metadata filters and outcome linking.',
+    desc: 'Vector memory backed by LanceDB with hybrid search, importance scoring, and LRU-cached embeddings. Searches are logged for observability.',
     files: ['core/memory.py', 'core/embeddings.py'],
     features: ['Hybrid retrieval: 70% vector + 30% BM25', 'Importance scoring (0.0-1.0) with search distance boost', 'Embedding LRU cache (256 entries)', 'Vector query logging (query, results, relevance, timing)', 'Structured metadata filters', 'Temporal decay weighting (30-day half-life)', '95% similarity dedup within 24h window', 'Auto-compaction of old low-importance records']
   },
   'node-seq-llm': {
-    title: 'LLM',
+    title: 'LLM (Reasoning)',
     category: 'Execution Flow',
-    categoryColor: '#06b6d4',
-    desc: 'The language model that powers agent reasoning. In tool_use mode: receives system prompt, history, and tool schemas, returns tool_use blocks or text. In structured mode: receives plain text and returns JSON plans instead of tool_use blocks.',
+    desc: 'The language model that powers agent reasoning. Receives system prompt, history, and tool schemas. Returns tool_use blocks or final text response.',
     files: ['core/llm.py', 'core/models.py'],
-    features: ['Prompt caching with cache_control (90% token cost reduction on static content)', 'Anthropic native API with system prompt caching', 'OpenAI-compatible mode for xAI, OpenAI, Ollama', 'Tool schema auto-conversion between provider formats', 'Returns tool_use blocks or final text response', 'Token usage tracking (input + output) per call', 'Temperature and max_tokens per-agent config', 'Primary/secondary provider fallback']
+    features: ['Prompt caching with cache_control (90% token cost reduction)', 'Anthropic native API with system prompt caching', 'OpenAI-compatible mode for xAI, OpenAI, Ollama', 'Tool schema auto-conversion between provider formats', 'Returns tool_use blocks or final text response', 'Token usage tracking per call', 'Primary/secondary provider fallback']
   },
   'node-seq-tool': {
-    title: 'Tool',
+    title: 'Tool (Execution)',
     category: 'Execution Flow',
-    categoryColor: '#06b6d4',
-    desc: 'Executable functions the agent can invoke. When the LLM returns a tool_use block, the agent executes it with auto-retry on transient errors, optionally summarizes large results, and feeds the result back to the LLM.',
+    desc: 'Executable functions the agent can invoke. When the LLM returns a tool_use block, the agent executes it with auto-retry, optionally summarizes large results, and feeds the result back.',
     files: ['core/tools.py', 'core/tool_discovery.py', 'tools/'],
-    features: ['Shared tools: web_search, http_request, x_api, fetch_url, file_ops, calculator, datetime', 'Built-in: memory_search, memory_store, memory_update, memory_link', 'Built-in: delegate_to, send_message, switch_model', 'Auto-retry on transient errors (timeout, 429, 503)', 'Result summarization for outputs > 2K chars', 'Runtime tool creation via tool_create meta-tool', 'Per-agent allowlist and denylist filtering', 'Auto-discovered from tools/ directory on startup']
+    features: ['Shared tools: web_search, http_request, x_api, fetch_url, file_ops, calculator, datetime', 'Built-in: memory_search, memory_store, memory_update, memory_link', 'Built-in: delegate_to, send_message, switch_model', 'Auto-retry on transient errors (timeout, 429, 503)', 'Result summarization for outputs > 2K chars', 'Runtime tool creation via tool_create meta-tool', 'Per-agent allowlist and denylist filtering']
   },
   'node-config-file': {
     title: 'alfred.json',
     category: 'Configuration',
-    categoryColor: '#666',
     desc: 'Central configuration file (gitignored). Defines everything: LLM providers, agent definitions with self-learning config, service credentials, schedules, Discord mappings, alert rules, and maintenance settings.',
     files: ['alfred.json'],
-    features: ['Provider API keys and model defaults', 'Agent definitions with per-agent overrides', 'schedule_run_mode: tool_use, structured, or batch (per-agent)', 'Per-agent tool allowlist for schema reduction', 'Self-learning config: reflection_enabled, summarize_tool_results, auto_recall_threshold', 'Alert rules: error rate, daily cost, bot crash thresholds', 'Service credentials with domain mapping', 'Cron schedule definitions', 'Maintenance settings (weekly memory compaction)', 'Discord channel-to-agent routing', 'Hot-reload via daemon SIGHUP']
+    features: ['Provider API keys and model defaults', 'Agent definitions with per-agent overrides', 'schedule_run_mode: tool_use, structured, or batch', 'Per-agent tool allowlist for schema reduction', 'Self-learning config: reflection_enabled, summarize_tool_results, auto_recall_threshold', 'Alert rules: error rate, daily cost, bot crash thresholds', 'Service credentials with domain mapping', 'Cron schedule definitions', 'Maintenance settings (weekly memory compaction)', 'Discord channel-to-agent routing', 'Hot-reload via daemon SIGHUP']
   },
-  // ── Structured Execution Flow Participants ──
+  // Structured Execution Flow
   'node-seq2-scheduler': {
     title: 'Scheduler',
     category: 'Structured Execution',
-    categoryColor: '#a855f7',
-    desc: 'Detects schedule_run_mode ("structured" or "batch") on the agent config and injects the appropriate context flags. Batch mode adds {"batch": true} to enable xAI Batch API at 50% cost. Skips the tool-round cap that normally limits scheduled runs. After the run completes, triggers session snapshot and daily log append.',
+    desc: 'Detects schedule_run_mode ("structured" or "batch") on the agent config and injects the appropriate context flags. Batch mode adds {"batch": true} to enable xAI Batch API at 50% cost.',
     files: ['__main__.py', 'core/scheduler.py'],
     features: ['Cron trigger with structured/batch context injection', 'Batch mode: structured + xAI Batch API (50% cost discount)', 'Tool-round cap bypass for structured/batch modes', 'Session snapshot saved after each scheduled run', 'Daily log auto-appended after run completion']
   },
   'node-seq2-agent': {
-    title: 'Agent',
+    title: 'Agent (Structured)',
     category: 'Structured Execution',
-    categoryColor: '#a855f7',
-    desc: 'Runs _run_structured() which makes exactly 2 LLM calls: one gather phase (data collection) and one action phase (decisions). Both return JSON plans that Python executes directly. No tool_use protocol, no tool schemas sent. Reduces a typical scheduled run from ~150K tokens to ~15K tokens. In batch mode, LLM calls use xAI Batch API with automatic fallback to real-time on timeout.',
+    desc: 'Runs _run_structured() which makes exactly 2 LLM calls: one gather phase (data collection) and one action phase (decisions). Both return JSON plans that Python executes directly.',
     files: ['core/agent.py'],
-    features: ['2-phase JSON planning: gather then act', 'No tool_use protocol overhead', 'Python-direct tool execution from JSON plans', 'Batch mode: xAI Batch API with auto-fallback to real-time', 'Result cap via tool_result_max_chars * 2', 'Reflection disabled for structured runs']
+    features: ['2-phase JSON planning: gather then act', 'No tool_use protocol overhead', 'Python-direct tool execution from JSON plans', 'Batch mode: xAI Batch API with auto-fallback to real-time', 'Result cap via tool_result_max_chars \u00d7 2', 'Reflection disabled for structured runs']
   },
   'node-seq2-llm': {
-    title: 'LLM',
+    title: 'LLM (JSON Output)',
     category: 'Structured Execution',
-    categoryColor: '#a855f7',
-    desc: 'In structured mode the LLM receives plain text (system prompt + task) with no tool schemas, saving ~16K tokens per call. Returns JSON with tool names and arguments instead of tool_use blocks. Exactly 2 calls total versus 10-15 in the standard tool_use loop.',
+    desc: 'In structured mode the LLM receives plain text (system prompt + task) with no tool schemas, saving ~16K tokens per call. Returns JSON with tool names and arguments.',
     files: ['core/llm.py'],
     features: ['No tool schemas sent (saves ~16K tokens per call)', 'JSON output instead of tool_use blocks', '2 calls total vs 10-15 in standard mode', 'Same provider and model as standard mode']
   },
   'node-seq2-tools': {
-    title: 'Tools',
+    title: 'Tools (Python-Direct)',
     category: 'Structured Execution',
-    categoryColor: '#a855f7',
-    desc: 'Tools are executed directly by Python from the JSON plan rather than via the LLM tool_use round-trip. The agent iterates the JSON array, resolves each tool by name, calls it with the provided arguments, and collects results for the next phase.',
+    desc: 'Tools are executed directly by Python from the JSON plan rather than via the LLM tool_use round-trip. The agent iterates the JSON array, resolves each tool by name, calls it with the provided arguments.',
     files: ['core/agent.py', 'core/tools.py'],
     features: ['Python-executed from JSON plans (no LLM round-trip)', 'No tool_use overhead per invocation', 'Same tool functions as standard mode', 'Results fed back as context for action phase']
+  },
+  // Tech Stack Drawer Entries
+  'stack-runtime': {
+    title: 'RUNTIME',
+    category: 'Runtime',
+    desc: 'Alfred is built on Python 3.11+ with async-first architecture. FastAPI serves the REST API and dashboard. discord.py handles the Discord gateway. All I/O is async via asyncio + aiohttp.',
+    files: ['pyproject.toml', 'core/api.py', 'core/discord.py'],
+    features: ['Python 3.11+ with type hints', 'asyncio event loop for concurrent I/O', 'aiohttp for async HTTP requests', 'FastAPI with uvicorn ASGI server', 'discord.py for Discord gateway', 'uv for dependency management']
+  },
+  'stack-llm': {
+    title: 'LLM PROVIDERS',
+    category: 'LLM Providers',
+    desc: 'Multi-provider LLM support with per-agent configuration. Anthropic uses the native API with prompt caching. OpenAI, xAI, and Ollama use the OpenAI-compatible wrapper. xAI also supports Batch API for 50% cost reduction.',
+    files: ['core/llm.py', 'core/models.py'],
+    features: ['Anthropic: Claude 4.5 Sonnet, Claude 4.5 Haiku (native API + prompt caching)', 'xAI: Grok models + Batch API for structured runs', 'OpenAI: GPT-4o, o1, o3-mini', 'Ollama: local models (Llama, Mistral, etc.)', 'Per-agent provider and model assignment', 'Primary/secondary provider fallback', 'Per-model cost estimation from token counts']
+  },
+  'stack-data': {
+    title: 'DATA LAYER',
+    category: 'Data Layer',
+    desc: 'Embedded data stores requiring zero external infrastructure. LanceDB handles vector embeddings with hybrid search. SQLite tracks metrics and costs. Sessions are atomic JSON files.',
+    files: ['core/memory.py', 'core/embeddings.py', 'core/metrics_store.py'],
+    features: ['LanceDB: embedded vector DB with hybrid BM25 + vector search', 'nomic-embed-text-v1.5: 768-dim embeddings, cached locally', 'SQLite: metrics, cost tracking, vector query logs', 'JSON session files with atomic writes', 'Session snapshots as markdown files', 'Daily logs as markdown (zero LLM cost)']
+  },
+  'stack-apis': {
+    title: 'EXTERNAL APIS',
+    category: 'External APIs',
+    desc: 'Alfred integrates with external services via configured credentials. Domain-based auto-injection means agents never handle raw API keys.',
+    files: ['tools/web_search.py', 'tools/x_api.py', 'core/alerting.py'],
+    features: ['Brave Search API: primary web search provider', 'X/Twitter: OAuth 1.0a for social media management', 'Discord Webhooks: operational alerts (errors, cost, crashes)', 'Domain-based credential auto-injection from alfred.json']
+  },
+  'stack-infra': {
+    title: 'INFRASTRUCTURE',
+    category: 'Infrastructure',
+    desc: 'Self-contained infrastructure with no external dependencies beyond API keys. Central JSON config, built-in scheduler, PID-based process management, and a static dashboard.',
+    files: ['core/config.py', 'core/scheduler.py', 'core/process.py'],
+    features: ['alfred.json: central config file (gitignored)', 'Built-in cron scheduler with catchup and retry', 'PID-based daemon control (start/stop/status)', 'Static HTML + vanilla JS dashboard', 'Hot-reload via SIGHUP signal', 'Zero external infrastructure required']
   }
 };
 
-let activeNodeId = null;
-const panel = document.getElementById('detail-panel');
-const backdrop = document.getElementById('detail-backdrop');
+// ═══════ DRAWER FUNCTIONS ═══════
+function buildDrawerHTML(data) {
+  var html = '';
+  var badgeColor = BADGE_COLORS[data.category] || 'orange';
+  html += '<div style="margin-bottom:16px;"><span class="drawer-badge drawer-badge--' + badgeColor + '">' + data.category + '</span></div>';
+  html += '<div class="drawer-section"><div class="drawer-text">' + data.desc + '</div></div>';
+  if (data.files && data.files.length) {
+    html += '<div class="drawer-section"><div class="drawer-section-title">FILES</div>';
+    data.files.forEach(function(f) {
+      html += '<div class="drawer-row"><span class="drawer-row-label">Source</span><span class="drawer-row-value"><span class="drawer-code">' + f + '</span></span></div>';
+    });
+    html += '</div>';
+  }
+  if (data.features && data.features.length) {
+    html += '<div class="drawer-section"><div class="drawer-section-title">FEATURES</div>';
+    data.features.forEach(function(f) {
+      html += '<div class="drawer-highlight">' + f + '</div>';
+    });
+    html += '</div>';
+  }
+  return html;
+}
 
-function openPanel(nodeId) {
-  const data = NODE_DATA[nodeId];
+function openDrawer(nodeId) {
+  var data = NODE_DATA[nodeId];
   if (!data) return;
-
-  document.getElementById('detail-category').textContent = data.category;
-  document.getElementById('detail-category').style.color = data.categoryColor;
-  document.getElementById('detail-title').textContent = data.title;
-  document.getElementById('detail-desc').textContent = data.desc;
-
-  const filesEl = document.getElementById('detail-files');
-  filesEl.innerHTML = data.files.length
-    ? '<div class="detail-section-label">Files</div>' + data.files.map(f => '<div class="detail-file">' + f + '</div>').join('')
-    : '';
-
-  const featEl = document.getElementById('detail-features');
-  featEl.innerHTML = data.features.length
-    ? '<div class="detail-section-label">Features</div>' + data.features.map(f => '<div class="detail-feature">' + f + '</div>').join('')
-    : '';
-
-  if (activeNodeId) {
-    const prev = document.getElementById(activeNodeId);
-    if (prev) prev.classList.remove('active');
-  }
-
-  activeNodeId = nodeId;
-  document.getElementById(nodeId).classList.add('active');
-  panel.classList.add('open');
-  backdrop.classList.add('open');
+  document.getElementById('drawer-title').textContent = data.title;
+  document.getElementById('drawer-body').innerHTML = buildDrawerHTML(data);
+  document.getElementById('drawer').classList.add('open');
+  document.getElementById('drawer-backdrop').classList.add('active');
+  document.body.style.overflow = 'hidden';
 }
 
-function closePanel() {
-  if (activeNodeId) {
-    const el = document.getElementById(activeNodeId);
-    if (el) el.classList.remove('active');
-  }
-  activeNodeId = null;
-  panel.classList.remove('open');
-  backdrop.classList.remove('open');
+function closeDrawer() {
+  document.getElementById('drawer').classList.remove('open');
+  document.getElementById('drawer-backdrop').classList.remove('active');
+  document.body.style.overflow = '';
 }
 
-document.querySelectorAll('.node-group[id]').forEach(node => {
-  node.addEventListener('click', e => {
-    e.stopPropagation();
-    const id = node.id;
-    if (activeNodeId === id) {
-      closePanel();
-    } else {
-      openPanel(id);
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape') closeDrawer();
+});
+
+// ═══════ TAB FUNCTIONS ═══════
+function showTab(name) {
+  document.querySelectorAll('.arch-panel').forEach(function(p) { p.classList.remove('active'); });
+  document.querySelectorAll('.arch-tab').forEach(function(t) { t.classList.remove('active'); });
+  var panel = document.getElementById('panel-' + name);
+  if (panel) panel.classList.add('active');
+  document.querySelectorAll('.arch-tab').forEach(function(t) {
+    if (t.getAttribute('onclick') && t.getAttribute('onclick').indexOf("'" + name + "'") !== -1) {
+      t.classList.add('active');
     }
   });
-});
+}
 
-backdrop.addEventListener('click', closePanel);
-document.getElementById('detail-close').addEventListener('click', closePanel);
-document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') closePanel();
-});
+// ═══════ SMART GRID ═══════
+function smartCols(n, maxCols) {
+  if (n <= 0) return 1;
+  if (n <= maxCols) return n;
+  for (var c = maxCols; c >= 2; c--) { if (n % c === 0) return c; }
+  for (var c = maxCols; c >= 2; c--) { if ((n % c) >= Math.ceil(c / 2)) return c; }
+  return maxCols;
+}
+
+var stackGrid = document.getElementById('stack-grid');
+if (stackGrid) {
+  stackGrid.style.gridTemplateColumns = 'repeat(' + smartCols(stackGrid.children.length, 3) + ', 1fr)';
+}
 </script>
 
 </body>

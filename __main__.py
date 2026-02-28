@@ -28,7 +28,7 @@ Commands:
     agent schedule list   - List scheduled tasks
     agent schedule remove - Remove a scheduled task
 
-    service add        - Add credentials for an external service (e.g. alpaca)
+    service add        - Add credentials for an external service (e.g. brave)
     service list       - Show configured services with masked keys
     service remove     - Remove a service configuration
 
@@ -131,9 +131,9 @@ Examples:
     alfred logs                                     # Watch the log
     alfred provider add anthropic                   # Add Claude as a provider
     alfred provider add brave                       # Add Brave Search (free web search)
-    alfred agent create trader                      # Create a trading agent
-    alfred agent chat trader                        # Chat with it
-    alfred agent chat trader --session research     # Named session
+    alfred agent create researcher                   # Create a research agent
+    alfred agent chat researcher                    # Chat with it
+    alfred agent chat researcher --session deep     # Named session
     alfred session list                             # See all saved sessions
     alfred session view alfred cli                  # View CLI conversation history
     alfred discord setup                            # Configure Discord channels
@@ -2449,107 +2449,6 @@ def cmd_discord_setup():
     console.print(f"  Start it: [bold]alfred discord start[/]\n")
 
 
-def _start_trading_bot():
-    """Start the BTC trading bot if the btc-trader agent is configured."""
-    import subprocess as _sp
-    from pathlib import Path as _P
-    from core.process import read_pid, is_alive, cleanup_stale_pid
-
-    project_root = _P(__file__).parent
-    bot_dir = project_root / "workspaces" / "btc-trader" / "bot"
-    run_script = bot_dir / "run"
-    pid_file = bot_dir / "bot.pid"
-
-    if not run_script.exists():
-        return  # btc-trader agent not set up
-
-    # Check if already running
-    pid = read_pid(pid_file)
-    if pid is not None and is_alive(pid):
-        return  # Already running
-    cleanup_stale_pid(pid_file)
-
-    try:
-        log_file = bot_dir / "trading_bot.log"
-        log_handle = open(log_file, "a")
-        proc = _sp.Popen(
-            ["bash", str(run_script)],
-            cwd=str(bot_dir),
-            stdout=log_handle,
-            stderr=_sp.STDOUT,
-            start_new_session=True,
-        )
-        # Bot writes its own PID file on startup, but write a quick one
-        # so stop_trading_bot can find it even if the bot hasn't booted yet
-        pid_file.write_text(str(proc.pid))
-    except Exception as e:
-        import logging as _log
-        _log.getLogger("alfred.trading").warning(f"Trading bot startup failed: {e}")
-
-
-def _stop_trading_bot():
-    """Stop the BTC trading bot if running."""
-    from pathlib import Path as _P
-    from core.process import read_pid, kill_and_wait
-
-    bot_dir = _P(__file__).parent / "workspaces" / "btc-trader" / "bot"
-    pid_file = bot_dir / "bot.pid"
-
-    pid = read_pid(pid_file)
-    if pid is not None:
-        kill_and_wait(pid, timeout=8.0)  # Extra time to flatten positions
-    pid_file.unlink(missing_ok=True)
-
-
-def _start_tsla_trading_bot():
-    """Start the TSLA trading bot if the tsla-trader agent is configured."""
-    import subprocess as _sp
-    from pathlib import Path as _P
-    from core.process import read_pid, is_alive, cleanup_stale_pid
-
-    project_root = _P(__file__).parent
-    bot_dir = project_root / "workspaces" / "tsla-trader" / "bot"
-    run_script = bot_dir / "run"
-    pid_file = bot_dir / "bot.pid"
-
-    if not run_script.exists():
-        return  # tsla-trader agent not set up
-
-    pid = read_pid(pid_file)
-    if pid is not None and is_alive(pid):
-        return  # Already running
-    cleanup_stale_pid(pid_file)
-
-    try:
-        log_file = bot_dir / "trading_bot.log"
-        log_handle = open(log_file, "a")
-        proc = _sp.Popen(
-            ["bash", str(run_script)],
-            cwd=str(bot_dir),
-            stdout=log_handle,
-            stderr=_sp.STDOUT,
-            start_new_session=True,
-        )
-        pid_file.write_text(str(proc.pid))
-    except Exception as e:
-        import logging as _log
-        _log.getLogger("alfred.trading").warning(f"TSLA trading bot startup failed: {e}")
-
-
-def _stop_tsla_trading_bot():
-    """Stop the TSLA trading bot if running."""
-    from pathlib import Path as _P
-    from core.process import read_pid, kill_and_wait
-
-    bot_dir = _P(__file__).parent / "workspaces" / "tsla-trader" / "bot"
-    pid_file = bot_dir / "bot.pid"
-
-    pid = read_pid(pid_file)
-    if pid is not None:
-        kill_and_wait(pid, timeout=8.0)
-    pid_file.unlink(missing_ok=True)
-
-
 def cmd_start(foreground: bool = False, _daemon_child: bool = False, port: int = 7700):
     """Start Alfred — launches all services (API + scheduler + Discord)."""
     import json
@@ -2665,10 +2564,6 @@ def cmd_start(foreground: bool = False, _daemon_child: bool = False, port: int =
         scheduler = Scheduler(agent_runner=_run_agent_task)
         scheduler.start()
 
-        # ── 1b. Trading bots (background processes) ──
-        _start_trading_bot()
-        _start_tsla_trading_bot()
-
         # ── 2. API server (daemon thread) ──
         api_started = False
         try:
@@ -2727,8 +2622,6 @@ def cmd_start(foreground: bool = False, _daemon_child: bool = False, port: int =
             try:
                 bot.run(foreground=not _daemon_child)
             finally:
-                _stop_trading_bot()
-                _stop_tsla_trading_bot()
                 scheduler.stop()
         else:
             # No Discord — API + Scheduler only. Block on signal.
@@ -2771,8 +2664,6 @@ def cmd_start(foreground: bool = False, _daemon_child: bool = False, port: int =
                         _pid_file.unlink(missing_ok=True)
                 except (ValueError, OSError):
                     _pid_file.unlink(missing_ok=True)
-                _stop_trading_bot()
-                _stop_tsla_trading_bot()
                 scheduler.stop()
     else:
         # Daemon mode — spawn a clean subprocess (lancedb is not fork-safe)

@@ -35,7 +35,7 @@ class Tool:
     description: str
     parameters: list[ToolParameter] = field(default_factory=list)
     execute: Callable = None
-    category: str = ""  # e.g., "trading", "social", "search", "memory"
+    category: str = ""  # e.g., "social", "search", "memory"
     source: str = "builtin"  # "builtin", "shared", "workspace", "community"
     file_path: str = ""  # Path to the .py file that defines this tool
     dependencies: list[str] = field(default_factory=list)  # pip packages needed
@@ -714,7 +714,7 @@ def register_builtin_tools(registry: ToolRegistry, agent_id: str = None,
 
         This creates a fresh agent instance, runs the task, and returns the response.
         Use this when a task falls outside your expertise or when another agent
-        is better suited (e.g., delegate trading analysis to the trader agent).
+        is better suited (e.g., delegate research to the researcher agent).
         Timeout: 5 minutes (configurable via delegation_timeout in alfred.json).
         """
         import concurrent.futures
@@ -762,7 +762,7 @@ def register_builtin_tools(registry: ToolRegistry, agent_id: str = None,
         description=(
             "Delegate a task to another agent and get back the result. "
             "Use when a task is better handled by a specialized agent "
-            "(e.g., trading analysis to 'trader', social posts to 'social'). "
+            "(e.g., research to 'researcher', social posts to 'social'). "
             "The other agent will process the task and return its response."
         ),
         fn=delegate_to,

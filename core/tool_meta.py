@@ -203,7 +203,7 @@ def register_meta_tools(registry: ToolRegistry, agent_name: str, workspace_path:
             ToolParameter("name", "string", "Tool name in snake_case (e.g. 'get_price', 'parse_csv')"),
             ToolParameter("description", "string", "Clear description of what this tool does — this is shown to the LLM when deciding which tool to call"),
             ToolParameter("code", "string", "The Python function code. Must define a function with the same name as the tool. Use type hints for parameters. Must return a string."),
-            ToolParameter("category", "string", "Tool category (e.g. 'trading', 'data', 'search', 'web', 'custom')", required=False),
+            ToolParameter("category", "string", "Tool category (e.g. 'data', 'search', 'web', 'custom')", required=False),
             ToolParameter("dependencies", "string", "Comma-separated pip packages needed (e.g. 'requests,beautifulsoup4')", required=False),
         ],
         category="meta",

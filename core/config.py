@@ -180,8 +180,7 @@ class Config:
         Build a domain→service mapping for auto-injection.
 
         Returns dict like:
-          {"paper-api.alpaca.markets": {"service": "alpaca", ...creds...},
-           "data.alpaca.markets": {"service": "alpaca", ...creds...}}
+          {"api.example.com": {"service": "example", ...creds...}}
         """
         cfg = _load_config()
         services = cfg.get("services", {})
