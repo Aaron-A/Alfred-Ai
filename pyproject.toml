@@ -15,22 +15,23 @@ dependencies = [
     "sentence-transformers>=3.0",
     "einops>=0.7",
     "lancedb>=0.10",
-
     # Web framework
     "fastapi>=0.100",
     "uvicorn>=0.20",
     "httpx>=0.25",
-
     # Discord
     "discord.py>=2.3",
-
     # CLI / TUI
     "rich>=13.0",
-
     # Data / Config
     "pydantic>=2.0",
     "python-dotenv>=1.0",
     "pyarrow>=14.0",
     "pyyaml>=6.0",
+    "playwright>=1.58.0",
+    "browser-cookie3>=0.20.1",
+    "twikit>=2.3.3",
+    "ipykernel>=7.2.0",
+    "jupyter-client>=8.8.0",
 ]
 

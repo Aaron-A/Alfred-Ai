@@ -146,6 +146,92 @@ class Schedule:
         return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
 
 
+# ─── Heartbeat System ───────────────────────────────────────────
+
+@dataclass
+class HeartbeatConfig:
+    """Heartbeat configuration for an agent's ambient awareness loop."""
+    enabled: bool = False
+    cron: str = "*/30 * * * *"
+    max_tool_rounds: int = 8
+    max_items_per_beat: int = 5
+    silent: bool = True  # Only post to Discord when action was taken
+    last_heartbeat: str = ""
+    stats: dict = field(default_factory=lambda: {
+        "total_beats": 0,
+        "total_actions": 0,
+        "total_skips": 0,
+        "items_checked": 0,
+        "last_action_at": "",
+    })
+    item_cooldowns: dict = field(default_factory=dict)  # label -> ISO timestamp
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "HeartbeatConfig":
+        return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+
+HEARTBEAT_META_PROMPT = """HEARTBEAT CHECK — {timestamp}
+
+You are performing a periodic heartbeat check. Read the checklist below and evaluate each item.
+
+## Rules
+1. For each item, decide if action is needed RIGHT NOW based on:
+   - Current time: {current_time}
+   - Priority level (high items always check, low items only if nothing else fires)
+   - Cooldown state (shown below — skip items still in cooldown)
+   - Your judgment and available context
+2. If action IS needed → execute using your tools, then note what you did
+3. If action is NOT needed → skip it silently
+4. After checking all items, respond with a brief summary
+5. Maximum {max_items} items can trigger action this heartbeat
+6. Be efficient with tool calls — one tool call to check, act only if needed
+
+## Cooldown State
+{cooldown_state}
+
+## Checklist
+{checklist_content}
+
+## Response Format
+If action was taken:
+HEARTBEAT_ACTIONS:
+- [Item Label]: What you did and why
+
+If nothing needed action:
+HEARTBEAT_OK
+
+End with: HEARTBEAT_STATUS: ok|action_taken ([N] items checked, [M] actions)
+"""
+
+
+def update_heartbeat_result(agent_name: str, result: str, items_checked: int = 0,
+                            actions_taken: int = 0, item_cooldowns: dict = None):
+    """Record a heartbeat result in alfred.json."""
+    cfg = _load_config()
+    if agent_name not in cfg.get("agents", {}):
+        return
+    hb = cfg["agents"][agent_name].get("heartbeat", {})
+    hb["last_heartbeat"] = datetime.now(config.tz).isoformat()
+
+    stats = hb.get("stats", {})
+    stats["total_beats"] = stats.get("total_beats", 0) + 1
+    stats["items_checked"] = stats.get("items_checked", 0) + items_checked
+    if actions_taken > 0:
+        stats["total_actions"] = stats.get("total_actions", 0) + 1
+        stats["last_action_at"] = datetime.now(config.tz).isoformat()
+    else:
+        stats["total_skips"] = stats.get("total_skips", 0) + 1
+    hb["stats"] = stats
+    if item_cooldowns is not None:
+        hb["item_cooldowns"] = item_cooldowns
+    cfg["agents"][agent_name]["heartbeat"] = hb
+    _save_config(cfg)
+
+
 def parse_cron_field(field_str: str, min_val: int, max_val: int) -> set[int]:
     """Parse a single cron field into a set of matching values."""
     values = set()
@@ -255,19 +341,24 @@ def describe_cron(cron_str: str) -> str:
     }
 
     time_str = ""
-    if minute != "*" and hour != "*":
-        # Handle hour ranges like "10-15"
+    if minute.startswith("*/"):
+        # Step minutes like */30 — check if hour has a range
         if "-" in hour and not hour.startswith("*/"):
+            h_start, h_end = hour.split("-", 1)
+            time_str = f"every {minute[2:]} min {h_start}-{h_end}h"
+        else:
+            time_str = f"every {minute[2:]} min"
+    elif hour.startswith("*/"):
+        time_str = f"every {hour[2:]} hr"
+    elif minute != "*" and hour != "*":
+        # Handle hour ranges like "10-15"
+        if "-" in hour:
             h_start, h_end = hour.split("-", 1)
             time_str = f":{int(minute):02d} {h_start}-{h_end}h"
         elif hour.isdigit() and minute.isdigit():
             time_str = f"{int(hour):02d}:{int(minute):02d}"
         else:
             time_str = f"{hour}:{minute}"
-    elif minute.startswith("*/"):
-        time_str = f"every {minute[2:]} min"
-    elif hour.startswith("*/"):
-        time_str = f"every {hour[2:]} hr"
     elif minute != "*" and hour == "*":
         time_str = f":{int(minute):02d} every hour" if minute.isdigit() else f":{minute} every hour"
 
@@ -391,13 +482,16 @@ class Scheduler:
         scheduler.stop()
     """
 
-    def __init__(self, agent_runner=None):
+    def __init__(self, agent_runner=None, heartbeat_runner=None):
         """
         Args:
             agent_runner: Callable(agent_name, task_message) -> str
                           Function that runs a task on an agent and returns the result.
+            heartbeat_runner: Callable(agent_name, HeartbeatConfig) -> str
+                              Function that runs a heartbeat check on an agent.
         """
         self._runner = agent_runner
+        self._heartbeat_runner = heartbeat_runner
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self._last_check_minute = -1
@@ -483,6 +577,7 @@ class Scheduler:
                 if current_minute != self._last_check_minute:
                     self._last_check_minute = current_minute
                     self._check_schedules(now)
+                    self._check_heartbeats(now)
                     # System maintenance (memory compaction, etc.)
                     self._check_maintenance(now)
             except Exception as e:
@@ -603,6 +698,77 @@ class Scheduler:
                             continue
 
                     self._execute_schedule(agent_name, schedule)
+
+    def _check_heartbeats(self, now: datetime):
+        """Check all agent heartbeats and run any that are due."""
+        if not self._heartbeat_runner:
+            return
+
+        try:
+            cfg = _load_config()
+        except Exception as e:
+            logger.error(f"Failed to load config for heartbeats: {e}")
+            return
+
+        for agent_name, agent_cfg in cfg.get("agents", {}).items():
+            if agent_cfg.get("status") == "paused":
+                continue
+
+            hb_data = agent_cfg.get("heartbeat")
+            if not hb_data or not hb_data.get("enabled", False):
+                continue
+
+            hb = HeartbeatConfig.from_dict(hb_data)
+
+            if not cron_matches(hb.cron, now):
+                continue
+
+            # Dedup: don't run twice in the same minute
+            if hb.last_heartbeat:
+                try:
+                    last = datetime.fromisoformat(hb.last_heartbeat)
+                    if last.tzinfo is None:
+                        last = last.replace(tzinfo=config.tz)
+                    if (last.hour == now.hour and last.minute == now.minute
+                            and last.date() == now.date()):
+                        continue
+                except (ValueError, TypeError):
+                    pass
+
+            # Don't start if a heartbeat is already running for this agent
+            heartbeat_id = f"heartbeat-{agent_name}"
+            if heartbeat_id in self._active_tasks:
+                if self._active_tasks[heartbeat_id].is_alive():
+                    logger.warning(
+                        f"Heartbeat for '{agent_name}' still running, skipping"
+                    )
+                    continue
+
+            self._execute_heartbeat(agent_name, hb)
+
+    def _execute_heartbeat(self, agent_name: str, hb: HeartbeatConfig):
+        """Execute a heartbeat check in a separate thread."""
+        logger.info(f"Heartbeat firing for '{agent_name}'")
+
+        def _run():
+            start_time = time.monotonic()
+            try:
+                result = self._heartbeat_runner(agent_name, hb)
+                elapsed = int((time.monotonic() - start_time) * 1000)
+                logger.info(f"Heartbeat for '{agent_name}' completed in {elapsed}ms")
+            except Exception as e:
+                elapsed = int((time.monotonic() - start_time) * 1000)
+                logger.error(f"Heartbeat for '{agent_name}' failed after {elapsed}ms: {e}")
+            finally:
+                self._active_tasks.pop(f"heartbeat-{agent_name}", None)
+
+        heartbeat_id = f"heartbeat-{agent_name}"
+        task_thread = threading.Thread(
+            target=_run, daemon=True,
+            name=f"heartbeat-{agent_name}",
+        )
+        self._active_tasks[heartbeat_id] = task_thread
+        task_thread.start()
 
     _last_maintenance_day: str = ""
 

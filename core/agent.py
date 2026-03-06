@@ -55,6 +55,27 @@ def _sanitize_secrets(text: str) -> str:
     return text
 
 
+# Patterns for LLM-generated artifacts that should never appear in output
+_LLM_ARTIFACT_PATTERNS = [
+    # Grok inline citation tags: <grok:render type="render_inline_citation"><argument name="citation_id">43</argument></grok:render>
+    _re.compile(r'<grok:[^>]*>.*?</grok:[^>]*>', _re.DOTALL),
+    # Grok self-closing tags: <grok:render ... />
+    _re.compile(r'<grok:[^/]*/>', _re.DOTALL),
+    # Stray `:eu:` or similar emoji shortcode artifacts from Grok
+    _re.compile(r'(?<!\w):eu:(?!\w)'),
+]
+
+
+def _strip_llm_artifacts(text: str) -> str:
+    """Remove LLM-specific markup artifacts (Grok citations, etc.) from output."""
+    for pattern in _LLM_ARTIFACT_PATTERNS:
+        text = pattern.sub('', text)
+    # Clean up leftover double-spaces and trailing whitespace on lines
+    text = _re.sub(r'[ \t]{2,}', ' ', text)
+    text = _re.sub(r' +\n', '\n', text)
+    return text.strip()
+
+
 @dataclass
 class AgentConfig:
     """Configuration for an agent."""
@@ -1511,9 +1532,14 @@ class Agent:
                     and not is_structured:
                 self._run_reflection(message, response, tool_call_count)
 
-            # Trim if we've grown past the window, then save to disk
+            # Trim if we've grown past the window, then save to disk.
+            # Skip session persistence for scheduled tasks — their bulky tool
+            # results (web searches, API calls) contaminate the Discord
+            # conversation session and confuse the model on subsequent messages.
             self.history = self._trim_history(self.history)
-            self._save_session()
+            is_scheduled = bool(context and context.get("scheduled"))
+            if not is_scheduled:
+                self._save_session()
 
             # Step 5.7: Append to daily log (episodic memory — no LLM call)
             elapsed_ms = int((time.monotonic() - start_time) * 1000)
@@ -1545,6 +1571,8 @@ class Agent:
 
             # Sanitize any accidentally leaked secrets from the response
             response = _sanitize_secrets(response)
+            # Strip LLM-specific artifacts (Grok citations, etc.)
+            response = _strip_llm_artifacts(response)
 
             return response
 
@@ -1666,7 +1694,17 @@ class Agent:
         '{"actions": [{"tool": "tool_name", "params": {"key": "value"}}], '
         '"summary": "Brief description of what you did and why"}\n\n'
         "Refer to the TOOLS section above for available tool names and parameters.\n"
-        "Include a memory_store action to log what you did.\n"
+        "Include a memory_store action to log what you did.\n\n"
+        "CRITICAL: Use ONLY real values extracted from the Gathered Context above. "
+        "NEVER use placeholder IDs, example values, or made-up data. "
+        "Tweet IDs must be real numeric IDs (e.g. '1234567890123456789') copied "
+        "exactly from the gathered results. If you don't have a real ID for an "
+        "action, skip that action entirely.\n\n"
+        "EXCEPTION — Self-reply threads: When creating a thread (multiple x_post_tweet "
+        "calls), use reply_to: \"$previous\" for the 2nd, 3rd, etc. tweets in the thread. "
+        "The system will automatically replace \"$previous\" with the actual tweet ID "
+        "from the preceding x_post_tweet call. The FIRST tweet in the thread should NOT "
+        "have a reply_to parameter.\n"
     )
 
     def _run_structured(self, task: str, system: str, context: dict = None) -> tuple[str, int, int, int, list[dict]]:
@@ -1710,18 +1748,29 @@ class Agent:
                     logger.warning(f"{self.config.name}: batch API failed ({e}), falling back to real-time")
 
             # Real-time fallback (or non-batch mode)
-            response = self.llm.anthropic_client.messages.create(
-                model=self.llm.model,
-                max_tokens=4096,
-                system=sys,
-                messages=[{"role": "user", "content": user_msg}],
-                temperature=self.config.temperature,
-            )
-            usage = getattr(response, "usage", None)
-            inp = getattr(usage, "input_tokens", 0) if usage else 0
-            out = getattr(usage, "output_tokens", 0) if usage else 0
-            text = "".join(b.text for b in response.content if hasattr(b, "text"))
-            return text, inp, out
+            # Use the correct client based on provider — Anthropic SDK for anthropic,
+            # OpenAI-compatible HTTP for xAI/OpenAI/Ollama
+            if self.llm.provider in self.llm.OPENAI_COMPATIBLE:
+                resp = self.llm.ask_full(
+                    user_msg,
+                    system=sys,
+                    max_tokens=4096,
+                    temperature=self.config.temperature,
+                )
+                return resp.text, resp.input_tokens, resp.output_tokens
+            else:
+                response = self.llm.anthropic_client.messages.create(
+                    model=self.llm.model,
+                    max_tokens=4096,
+                    system=sys,
+                    messages=[{"role": "user", "content": user_msg}],
+                    temperature=self.config.temperature,
+                )
+                usage = getattr(response, "usage", None)
+                inp = getattr(usage, "input_tokens", 0) if usage else 0
+                out = getattr(usage, "output_tokens", 0) if usage else 0
+                text = "".join(b.text for b in response.content if hasattr(b, "text"))
+                return text, inp, out
 
         def _parse_json(text: str) -> dict | None:
             """Extract JSON from LLM response (handles markdown fences)."""
@@ -1739,9 +1788,17 @@ class Agent:
                 return None
 
         def _execute_tools(tool_list: list[dict]) -> list[dict]:
-            """Execute a list of {"tool": name, "params": {}} dicts. Returns results."""
+            """Execute a list of {"tool": name, "params": {}} dicts. Returns results.
+
+            Thread chaining: tracks the last tweet ID from x_post_tweet results
+            so subsequent calls can use reply_to with placeholders like
+            "$previous.id" or "$previous_tweet_id" — enabling self-reply threads
+            without the LLM needing to know the tweet ID at composition time.
+            """
             nonlocal tool_call_count
             results = []
+            last_tweet_id = None  # Track for thread chaining
+
             for item in tool_list:
                 name = item.get("tool", "")
                 params = item.get("params", {})
@@ -1749,12 +1806,36 @@ class Agent:
                     results.append({"tool": name, "error": f"Tool '{name}' not available"})
                     logger.warning(f"{self.config.name}: structured: unknown tool '{name}'")
                     continue
+
+                # Thread chaining: replace placeholder reply_to with actual tweet ID
+                if name == "x_post_tweet" and last_tweet_id:
+                    reply_to = params.get("reply_to", "")
+                    if reply_to and isinstance(reply_to, str):
+                        # Replace any placeholder pattern (e.g. $previous.id, $previous_tweet_id,
+                        # {{previous_id}}, PREVIOUS_TWEET_ID, etc.)
+                        if not reply_to.isdigit():
+                            logger.info(
+                                f"{self.config.name}: structured: replacing reply_to "
+                                f"placeholder '{reply_to}' with actual tweet ID {last_tweet_id}"
+                            )
+                            params["reply_to"] = last_tweet_id
+
                 tool_call_count += 1
                 logger.info(f"{self.config.name}: structured: {name}({json.dumps(params)[:200]})")
                 tool_start = time.monotonic()
                 result = self._execute_tool_with_retry(name, params)
                 tool_ms = int((time.monotonic() - tool_start) * 1000)
                 logger.info(f"{self.config.name}: structured: {name} -> {tool_ms}ms ({len(result)} chars)")
+
+                # Extract tweet ID from x_post_tweet results for thread chaining
+                if name == "x_post_tweet" and result:
+                    import re as _re_inner
+                    # Match tweet ID patterns in the result (e.g. "id: 1234567890" or status URL)
+                    id_match = _re_inner.search(r'(?:id["\s:]+|status/)(\d{10,20})', result)
+                    if id_match:
+                        last_tweet_id = id_match.group(1)
+                        logger.info(f"{self.config.name}: structured: captured tweet ID {last_tweet_id} for thread chaining")
+
                 cap = self.config.tool_result_max_chars * 2  # structured gets 2x (no summarization)
                 results.append({"tool": name, "result": result[:cap]})
             return results

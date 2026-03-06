@@ -269,7 +269,7 @@ def register_builtin_tools(registry: ToolRegistry, agent_id: str = None,
     # ─── Memory Tools (agent-scoped by default) ──────────────
 
     def memory_search(query: str, memory_type: str = None, top_k: int = 5,
-                       filters: str = None) -> str:
+                       filters: str = None, tags: str = None) -> str:
         """Search your own memory for relevant context."""
         from .memory import MemoryStore
         store = MemoryStore(agent_id=agent_id or "default")
@@ -285,8 +285,17 @@ def register_builtin_tools(registry: ToolRegistry, agent_id: str = None,
             except (json.JSONDecodeError, TypeError):
                 pass  # Ignore malformed filters
 
+        # If tags are provided, add them to the query for better semantic matching
+        # (tags are stored in the content/metadata of memories, so including them
+        # in the search query improves relevance)
+        search_query = query
+        if tags:
+            tag_list = [t.strip() for t in tags.split(",") if t.strip()]
+            if tag_list:
+                search_query = f"{query} {' '.join(tag_list)}"
+
         results = store.search(
-            query=query, memory_type=memory_type or None,
+            query=search_query, memory_type=memory_type or None,
             top_k=top_k, where=where, filters=parsed_filters,
         )
         if not results:
@@ -316,6 +325,7 @@ def register_builtin_tools(registry: ToolRegistry, agent_id: str = None,
             ToolParameter("memory_type", "string", "Filter to type: trade, macro, tweet, decision (optional)", required=False),
             ToolParameter("top_k", "integer", "Number of results (default 5)", required=False),
             ToolParameter("filters", "string", 'JSON object for structured filtering, e.g. \'{"symbol":"BTC/USD","outcome":"win"}\' (optional)', required=False),
+            ToolParameter("tags", "string", "Comma-separated tags to filter by (e.g. 'post,morning,ai'). Improves search relevance.", required=False),
         ],
         category="memory",
     )

@@ -1,10 +1,12 @@
 """
 X (Twitter) API Tool
-Authenticated access to X API v2 with OAuth 1.0a signing.
+Authenticated access to X API v2 with OAuth 2.0 (preferred) or OAuth 1.0a fallback.
 
-Handles all the OAuth complexity internally — agents just call the tool
-with an endpoint and get back authenticated responses. No credentials
-in workspace files, no manual headers.
+OAuth 2.0 user-context tokens provide the same permissions as the web UI,
+including replying to conversations that OAuth 1.0a can't access.
+
+Handles all the auth complexity internally — agents just call the tool
+with an endpoint and get back authenticated responses.
 
 Uses only Python stdlib: hmac, hashlib, base64, urllib, uuid, time.
 """
@@ -25,6 +27,7 @@ from core.logging import get_logger
 logger = get_logger("x_api")
 
 X_API_BASE = "https://api.x.com"
+OAUTH2_TOKEN_URL = "https://api.twitter.com/2/oauth2/token"
 
 
 # ─── OAuth 1.0a Signing ─────────────────────────────────────────
@@ -128,6 +131,88 @@ def _get_x_credentials() -> dict:
     return config.get_service_credentials("x")
 
 
+# ─── OAuth 2.0 Token Management ─────────────────────────────────
+
+def _get_oauth2_token() -> str | None:
+    """
+    Get a valid OAuth 2.0 access token if available.
+    Returns None if OAuth 2.0 is not configured or token refresh fails.
+    """
+    creds = _get_x_credentials()
+    token = creds.get("oauth2_access_token")
+    if not token:
+        return None
+
+    # Check if token is expired (with 60s buffer)
+    expires_at = creds.get("oauth2_expires_at", 0)
+    if expires_at and time.time() > expires_at - 60:
+        logger.info("OAuth 2.0 token expired, attempting refresh...")
+        refreshed = _refresh_oauth2_token(creds)
+        if refreshed:
+            return refreshed
+        logger.warning("OAuth 2.0 token refresh failed, falling back to OAuth 1.0a")
+        return None
+
+    return token
+
+
+def _refresh_oauth2_token(creds: dict) -> str | None:
+    """Refresh an expired OAuth 2.0 token using the refresh token."""
+    refresh_token = creds.get("oauth2_refresh_token")
+    client_id = creds.get("oauth2_client_id")
+    client_secret = creds.get("oauth2_client_secret")
+
+    if not all([refresh_token, client_id, client_secret]):
+        return None
+
+    data = urllib.parse.urlencode({
+        "grant_type": "refresh_token",
+        "refresh_token": refresh_token,
+        "client_id": client_id,
+    }).encode("utf-8")
+
+    credentials = base64.b64encode(f"{client_id}:{client_secret}".encode()).decode()
+
+    req = urllib.request.Request(
+        OAUTH2_TOKEN_URL,
+        data=data,
+        headers={
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Authorization": f"Basic {credentials}",
+        },
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            token_data = json.loads(resp.read().decode())
+
+        # Persist new tokens to config
+        from core.config import _load_config, _save_config
+        cfg = _load_config()
+        x_cfg = cfg.get("services", {}).get("x", {})
+        x_cfg["oauth2_access_token"] = token_data["access_token"]
+        if token_data.get("refresh_token"):
+            x_cfg["oauth2_refresh_token"] = token_data["refresh_token"]
+        x_cfg["oauth2_expires_at"] = int(time.time()) + token_data.get("expires_in", 7200)
+        cfg["services"]["x"] = x_cfg
+        _save_config(cfg)
+
+        logger.info("OAuth 2.0 token refreshed successfully")
+        return token_data["access_token"]
+    except urllib.error.HTTPError as e:
+        body = ""
+        try:
+            body = e.read().decode()[:500]
+        except Exception:
+            pass
+        logger.warning(f"OAuth 2.0 refresh failed: HTTP {e.code} — {body}")
+        return None
+    except Exception as e:
+        logger.warning(f"OAuth 2.0 refresh failed: {e}")
+        return None
+
+
 def _get_user_id(creds: dict) -> str:
     """Get the authenticated user's ID, fetching from API if needed."""
     uid = creds.get("user_id", "")
@@ -223,15 +308,23 @@ def x_api_request(
         qs = urllib.parse.urlencode(query_params, quote_via=urllib.parse.quote)
         full_url = f"{url}?{qs}"
 
-    # OAuth signature uses base URL (without query string)
-    # Query params are included in the signature via the params dict
-    auth_header = _build_oauth_header(method, url, query_params if method == "GET" else {}, creds)
-
-    headers = {
-        "Authorization": auth_header,
-        "User-Agent": "Alfred-AI/1.0",
-        "Content-Type": "application/json",
-    }
+    # Prefer OAuth 2.0 user-context tokens (same permissions as web UI)
+    # Fall back to OAuth 1.0a if OAuth 2.0 is not configured
+    oauth2_token = _get_oauth2_token()
+    if oauth2_token:
+        headers = {
+            "Authorization": f"Bearer {oauth2_token}",
+            "User-Agent": "Alfred-AI/1.0",
+            "Content-Type": "application/json",
+        }
+    else:
+        # OAuth 1.0a fallback — signature uses base URL (without query string)
+        auth_header = _build_oauth_header(method, url, query_params if method == "GET" else {}, creds)
+        headers = {
+            "Authorization": auth_header,
+            "User-Agent": "Alfred-AI/1.0",
+            "Content-Type": "application/json",
+        }
 
     # Prepare body for POST/PUT/PATCH
     data = None
@@ -302,6 +395,17 @@ def x_post_tweet(text: str, reply_to: str = None) -> str:
         method="POST",
         body=json.dumps(body),
     )
+
+    # Handle 403 reply restriction — provide clear guidance
+    if reply_to and result.startswith("HTTP 403"):
+        if "not been mentioned" in result or "not allowed" in result:
+            return (
+                "Reply blocked: The tweet author has reply restrictions — "
+                "only accounts they've mentioned or engaged with can reply. "
+                "This is a Twitter/X platform restriction, not an API error. "
+                "You CANNOT work around this. Do NOT post a standalone mention instead. "
+                "Tell the user: this account has restricted replies, so we can't reply directly."
+            )
 
     # Parse the response to extract the tweet ID for convenience
     try:
@@ -437,8 +541,9 @@ def register(registry: ToolRegistry):
         name="x_api",
         description=(
             "Make an authenticated request to the X (Twitter) API v2. "
-            "Handles OAuth 1.0a signing automatically. Use this for any "
-            "X API endpoint not covered by the convenience tools."
+            "Uses OAuth 2.0 user-context tokens when available, with "
+            "OAuth 1.0a fallback. Use this for any X API endpoint not "
+            "covered by the convenience tools."
         ),
         fn=x_api_request,
         parameters=[

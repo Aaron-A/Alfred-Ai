@@ -250,6 +250,29 @@ class LLMClient:
                 )
         except urllib.error.HTTPError as e:
             body = e.read().decode("utf-8", errors="replace")
+
+            # Retry with max_completion_tokens if the API rejects max_tokens
+            # (xAI's Responses API backend uses max_completion_tokens instead)
+            if "max_tokens" in body and ("unexpected" in body or "Responses" in body):
+                logger.warning(f"API rejected max_tokens, retrying with max_completion_tokens")
+                payload.pop("max_tokens", None)
+                payload["max_completion_tokens"] = max_tokens
+                data2 = json.dumps(payload).encode("utf-8")
+                req2 = urllib.request.Request(url, data=data2, headers=headers, method="POST")
+                try:
+                    with urllib.request.urlopen(req2, timeout=120) as resp2:
+                        result = json.loads(resp2.read().decode("utf-8"))
+                        usage = result.get("usage", {})
+                        return LLMResponse(
+                            text=result["choices"][0]["message"]["content"],
+                            input_tokens=usage.get("prompt_tokens", 0),
+                            output_tokens=usage.get("completion_tokens", 0),
+                            model=model,
+                            provider=provider,
+                        )
+                except Exception:
+                    pass  # Fall through to original error
+
             raise RuntimeError(f"LLM API error ({e.code}): {body}") from e
         except urllib.error.URLError as e:
             if provider == "ollama":
@@ -439,6 +462,35 @@ class LLMClient:
                         continue
         except urllib.error.HTTPError as e:
             body = e.read().decode("utf-8", errors="replace")
+
+            # Retry with max_completion_tokens if the API rejects max_tokens
+            if "max_tokens" in body and ("unexpected" in body or "Responses" in body):
+                logger.warning(f"Stream: API rejected max_tokens, retrying with max_completion_tokens")
+                payload.pop("max_tokens", None)
+                payload["max_completion_tokens"] = max_tokens
+                data2 = json.dumps(payload).encode("utf-8")
+                req2 = urllib.request.Request(url, data=data2, headers=headers, method="POST")
+                try:
+                    with urllib.request.urlopen(req2, timeout=120) as resp2:
+                        for line in resp2:
+                            line = line.decode("utf-8").strip()
+                            if not line or not line.startswith("data: "):
+                                continue
+                            data_str = line[6:]
+                            if data_str == "[DONE]":
+                                break
+                            try:
+                                chunk = json.loads(data_str)
+                                delta = chunk.get("choices", [{}])[0].get("delta", {})
+                                content = delta.get("content", "")
+                                if content:
+                                    yield content
+                            except (json.JSONDecodeError, IndexError, KeyError):
+                                continue
+                    return
+                except Exception:
+                    pass  # Fall through to original error
+
             raise RuntimeError(f"LLM API error ({e.code}): {body}") from e
         except urllib.error.URLError as e:
             if provider == "ollama":

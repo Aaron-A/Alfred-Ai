@@ -2560,8 +2560,115 @@ def cmd_start(foreground: bool = False, _daemon_child: bool = False, port: int =
 
             return result
 
+        def _run_heartbeat_task(agent_name: str, hb_config) -> str:
+            """Heartbeat callback — reads HEARTBEAT.md, builds meta-prompt, runs agent."""
+            from core.scheduler import HeartbeatConfig, update_heartbeat_result, HEARTBEAT_META_PROMPT
+            from datetime import datetime as _dt
+
+            _cfg = _reload_config()
+            agent_data = _cfg.get("agents", {}).get(agent_name)
+            if not agent_data:
+                raise ValueError(f"Agent '{agent_name}' not found")
+
+            agent_data = dict(agent_data)
+            agent_data["name"] = agent_name
+
+            from core.config import config as _config
+            workspace = _Path(agent_data.get("workspace", f"workspaces/{agent_name}"))
+            if not workspace.is_absolute():
+                workspace = _config.PROJECT_ROOT / workspace
+            agent_data["workspace"] = str(workspace)
+
+            # Read HEARTBEAT.md
+            heartbeat_file = workspace / "HEARTBEAT.md"
+            if not heartbeat_file.exists():
+                logger.info(f"No HEARTBEAT.md for '{agent_name}', skipping heartbeat")
+                update_heartbeat_result(agent_name, "skipped", 0, 0, hb_config.item_cooldowns)
+                return "HEARTBEAT_SKIP: no HEARTBEAT.md found"
+
+            checklist_content = heartbeat_file.read_text().strip()
+            if not checklist_content:
+                update_heartbeat_result(agent_name, "skipped", 0, 0, hb_config.item_cooldowns)
+                return "HEARTBEAT_SKIP: empty HEARTBEAT.md"
+
+            # Build cooldown state string
+            now = _dt.now(_config.tz)
+            cooldown_lines = []
+            for item_label, last_ts in hb_config.item_cooldowns.items():
+                try:
+                    last_dt = _dt.fromisoformat(last_ts)
+                    if last_dt.tzinfo is None:
+                        last_dt = last_dt.replace(tzinfo=_config.tz)
+                    age_min = (now - last_dt).total_seconds() / 60
+                    cooldown_lines.append(f"- {item_label}: last action {int(age_min)}m ago")
+                except (ValueError, TypeError):
+                    cooldown_lines.append(f"- {item_label}: available")
+            cooldown_state = "\n".join(cooldown_lines) if cooldown_lines else "No previous actions recorded."
+
+            # Build meta-prompt
+            meta_prompt = HEARTBEAT_META_PROMPT.format(
+                timestamp=now.isoformat(),
+                current_time=now.strftime("%Y-%m-%d %H:%M %Z"),
+                cooldown_state=cooldown_state,
+                max_items=hb_config.max_items_per_beat,
+                checklist_content=checklist_content,
+            )
+
+            # Create agent with heartbeat-specific settings
+            agent_config = AgentConfig.from_dict(agent_data)
+            agent_config.max_tool_rounds = min(
+                agent_config.max_tool_rounds, hb_config.max_tool_rounds
+            )
+            agent = Agent(agent_config)
+            agent.history = []  # Clean session for heartbeats
+
+            # Run the heartbeat
+            ctx = {"scheduled": True, "heartbeat": True}
+            result = agent.run(meta_prompt, context=ctx)
+
+            # Snapshot the heartbeat conversation
+            agent._save_session_snapshot()
+
+            # Parse result for stats
+            items_checked = checklist_content.count("- [ ]")
+            action_taken = "HEARTBEAT_OK" not in (result or "")
+
+            # Count actions from the result
+            actions = 0
+            if result and "HEARTBEAT_ACTIONS:" in result:
+                action_section = result.split("HEARTBEAT_ACTIONS:", 1)[1]
+                actions = sum(1 for line in action_section.split("\n")
+                              if line.strip().startswith("- [") or line.strip().startswith("- **"))
+                actions = max(actions, 1) if action_taken else 0
+
+            # Update cooldowns for items that had actions
+            new_cooldowns = dict(hb_config.item_cooldowns)
+            if result and action_taken:
+                for line in result.split("\n"):
+                    line = line.strip()
+                    if line.startswith("- [") and "]:" in line:
+                        label = line.split("]:")[0].replace("- [", "").strip()
+                        new_cooldowns[label] = now.isoformat()
+
+            # Record result
+            update_heartbeat_result(
+                agent_name, "action_taken" if action_taken else "ok",
+                items_checked=items_checked,
+                actions_taken=actions,
+                item_cooldowns=new_cooldowns,
+            )
+
+            # Post to Discord if action was taken
+            if _discord_bot[0] and result and action_taken:
+                try:
+                    _discord_bot[0].post_to_agent_channel(agent_name, result)
+                except Exception:
+                    pass
+
+            return result or "HEARTBEAT_OK"
+
         # ── 1. Scheduler (background thread) ──
-        scheduler = Scheduler(agent_runner=_run_agent_task)
+        scheduler = Scheduler(agent_runner=_run_agent_task, heartbeat_runner=_run_heartbeat_task)
         scheduler.start()
 
         # ── 2. API server (daemon thread) ──
